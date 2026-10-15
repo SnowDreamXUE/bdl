@@ -313,12 +313,13 @@ impl ReqwestFetcher {
         }
 
         let mut last_error = None;
+        let mut source_errors = vec![None; urls.len()];
         let attempts = self.config.max_retries + 1;
         let mut attempted = 0;
         for _ in 0..attempts {
             ensure_not_cancelled(&cancel_token)?;
             let mut retryable_error_seen = false;
-            for url in &urls {
+            for (source_index, url) in urls.iter().enumerate() {
                 ensure_not_cancelled(&cancel_token)?;
                 attempted += 1;
                 match self
@@ -332,7 +333,15 @@ impl ReqwestFetcher {
                         {
                             return Err(error);
                         }
-                        let message = error.to_string();
+                        let message = crate::account::redact_sensitive(&error.to_string());
+                        let host = url::Url::parse(url)
+                            .ok()
+                            .and_then(|url| url.host_str().map(str::to_owned))
+                            .unwrap_or_else(|| "unknown".to_owned());
+                        source_errors[source_index] = Some(format!(
+                            "source={} host={host}: {message}",
+                            source_index + 1
+                        ));
                         retryable_error_seen |= !message.contains("HTTP 404");
                         last_error = Some(message);
                     }
@@ -343,11 +352,26 @@ impl ReqwestFetcher {
             }
         }
 
+        let failure_code = last_error
+            .as_deref()
+            .and_then(crate::diagnostics::classify_failure)
+            .map_or("download_failed", |rule| rule.code.as_str());
         Err(fetch_error(format!(
-            "下载 `{}` 失败，已尝试 {attempted} attempts across {} URLs: {}",
+            "[stage=fetch_resource code={failure_code}] 下载 `{}` 失败，已尝试 {attempted} attempts across {} URLs: {}\n失败时配置: segment_count={} max_retries={} proxy_enabled={}\n各下载源最后错误：\n{}",
             resource.id,
             urls.len(),
-            last_error.unwrap_or_else(|| "unknown error".to_owned())
+            last_error.unwrap_or_else(|| "unknown error".to_owned()),
+            self.config.segment_count,
+            self.config.max_retries,
+            self.config
+                .proxy_url
+                .as_ref()
+                .is_some_and(|url| !url.trim().is_empty()),
+            source_errors
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join("\n")
         )))
     }
 }
@@ -395,6 +419,7 @@ impl ReqwestFetcher {
         };
 
         validate_get_status(response.status(), resume_from)?;
+        let response_info = response_diagnostic_context(&response);
 
         if response_uses_deflate(&response, &metadata) {
             return self
@@ -418,7 +443,13 @@ impl ReqwestFetcher {
                 chunk = stream.next() => chunk,
             };
             let Some(chunk) = chunk else { break };
-            let chunk = chunk.map_err(|error| fetch_error(format!("读取响应失败: {error}")))?;
+            let chunk = chunk.map_err(|error| {
+                response_body_error(
+                    "读取响应失败",
+                    &format!("received={downloaded_bytes} {response_info}"),
+                    error,
+                )
+            })?;
             self.wait_for_bandwidth(chunk.len() as u64, &cancel_token)
                 .await?;
             file.write_all(&chunk).await?;
@@ -465,6 +496,7 @@ impl ReqwestFetcher {
     ) -> BdlResult<FetchOutcome> {
         let mut encoded = Vec::new();
         let mut downloaded_bytes = 0_u64;
+        let response_info = response_diagnostic_context(&response);
         let mut stream = response.bytes_stream();
         loop {
             let chunk = tokio::select! {
@@ -472,7 +504,13 @@ impl ReqwestFetcher {
                 chunk = stream.next() => chunk,
             };
             let Some(chunk) = chunk else { break };
-            let chunk = chunk.map_err(|error| fetch_error(format!("读取压缩响应失败: {error}")))?;
+            let chunk = chunk.map_err(|error| {
+                response_body_error(
+                    "读取压缩响应失败",
+                    &format!("received={downloaded_bytes} {response_info}"),
+                    error,
+                )
+            })?;
             self.wait_for_bandwidth(chunk.len() as u64, &cancel_token)
                 .await?;
             encoded.extend_from_slice(&chunk);
@@ -634,6 +672,7 @@ impl ReqwestFetcher {
                 response.status()
             )));
         }
+        let response_info = response_diagnostic_context(&response);
 
         let mut file = OpenOptions::new()
             .create(true)
@@ -650,7 +689,9 @@ impl ReqwestFetcher {
                 chunk = stream.next() => chunk,
             };
             let Some(chunk) = chunk else { break };
-            let chunk = chunk.map_err(|error| fetch_error(format!("读取分段响应失败: {error}")))?;
+            let chunk = chunk.map_err(|error| response_body_error("读取分段响应失败", &format!(
+                "segment={} range={request_start}-{} received={downloaded_bytes} {response_info}", segment.index, segment.end
+            ), error))?;
             self.wait_for_bandwidth(chunk.len() as u64, &cancel_token)
                 .await?;
             file.write_all(&chunk).await?;
@@ -743,6 +784,44 @@ impl ReqwestFetcher {
             response.status() == StatusCode::PARTIAL_CONTENT,
         )
     }
+}
+
+fn response_diagnostic_context(response: &reqwest::Response) -> String {
+    let encoding = response
+        .headers()
+        .get(CONTENT_ENCODING)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("identity_or_auto_decoded");
+    format!(
+        "http_status={} protocol={:?} content_encoding={encoding}",
+        response.status().as_u16(),
+        response.version()
+    )
+}
+
+fn response_body_error(phase: &str, context: &str, error: reqwest::Error) -> BdlError {
+    let error = error.without_url();
+    let code = if error.is_timeout() {
+        "network_timeout"
+    } else {
+        "response_body_failed"
+    };
+    let mut causes = Vec::new();
+    let mut current = std::error::Error::source(&error);
+    while let Some(cause) = current {
+        causes.push(cause.to_string());
+        if causes.len() >= 8 {
+            break;
+        }
+        current = cause.source();
+    }
+    fetch_error(crate::account::redact_sensitive(&format!(
+        "[stage=response_body code={code}] {phase}: {error}; {context}; is_decode={} is_body={} is_timeout={}; cause={}",
+        error.is_decode(),
+        error.is_body(),
+        error.is_timeout(),
+        causes.join(" <- ")
+    )))
 }
 
 fn remote_resource_metadata(

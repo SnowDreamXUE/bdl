@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use bdl_core::{BdlError, BdlResult};
 use bdl_tauri::task_execution::{
-    NotificationPermissionState, TaskExecutionBackend, TaskExecutionBackendImpl,
+    DeviceEnvironment, NotificationPermissionState, TaskExecutionBackend, TaskExecutionBackendImpl,
 };
 use serde::Serialize;
 use tauri::{
@@ -57,6 +57,13 @@ fn map_permission_state(state: TauriPermissionState) -> NotificationPermissionSt
 }
 
 impl<R: Runtime> TaskExecutionBackendImpl for AndroidTaskExecutionBackend<R> {
+    fn device_environment(&self) -> BdlResult<DeviceEnvironment> {
+        self.handle
+            .run_mobile_plugin("deviceEnvironment", ())
+            .map_err(|error| BdlError::Platform {
+                message: format!("Android 运行环境读取失败：{error}"),
+            })
+    }
     fn set_active(&self, active: bool) -> BdlResult<()> {
         self.handle
             .run_mobile_plugin::<serde_json::Value>("setActive", ExecutionPayload { active })

@@ -351,6 +351,15 @@ pub async fn verify_cookie_session(cookie: &str) -> BdlResult<AccountSummary> {
 }
 
 pub fn redact_sensitive(input: &str) -> String {
+    redact_with_limit(input, MAX_REDACTED_TEXT_CHARS)
+}
+
+/// Structured diagnostics aggregate multiple already-bounded response errors.
+pub fn redact_diagnostic(input: &str) -> String {
+    redact_with_limit(input, 64 * 1024)
+}
+
+fn redact_with_limit(input: &str, max_chars: usize) -> String {
     let value = ["Cookie", "Authorization", "Proxy-Authorization"]
         .into_iter()
         .fold(input.to_owned(), |value, key| {
@@ -374,7 +383,7 @@ pub fn redact_sensitive(input: &str) -> String {
     ]
     .into_iter()
     .fold(value, |value, key| redact_key_value(&value, key));
-    truncate_chars(&value, MAX_REDACTED_TEXT_CHARS)
+    truncate_chars(&value, max_chars)
 }
 
 fn render_qr_svg(url: &str) -> BdlResult<String> {

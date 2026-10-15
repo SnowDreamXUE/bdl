@@ -1,7 +1,14 @@
 use std::sync::Arc;
 
 use bdl_core::BdlResult;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DeviceEnvironment {
+    pub os_version: Option<String>,
+    pub android_sdk: Option<u32>,
+    pub webview_version: Option<String>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -14,6 +21,9 @@ pub enum NotificationPermissionState {
 }
 
 pub trait TaskExecutionBackendImpl: Send + Sync {
+    fn device_environment(&self) -> BdlResult<DeviceEnvironment> {
+        Ok(DeviceEnvironment::default())
+    }
     fn set_active(&self, active: bool) -> BdlResult<()>;
     fn sync_scheduled_wakeups(&self, scheduled_at_unix_millis: &[i64]) -> BdlResult<()>;
     fn notification_permission_state(&self) -> BdlResult<NotificationPermissionState>;
@@ -26,6 +36,9 @@ pub struct TaskExecutionBackend {
 }
 
 impl TaskExecutionBackend {
+    pub fn device_environment(&self) -> BdlResult<DeviceEnvironment> {
+        self.inner.device_environment()
+    }
     pub fn from_impl<T>(backend: T) -> Self
     where
         T: TaskExecutionBackendImpl + 'static,

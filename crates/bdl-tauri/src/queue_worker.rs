@@ -31,7 +31,7 @@ pub(crate) fn start(app: &AppHandle) {
         state.finish_queue_worker();
 
         if let Err(error) = result {
-            tracing::error!("queue worker failed: {}", error.message);
+            tracing::error!("queue worker failed: {}", error.diagnostic_message());
         }
 
         let should_restart = matches!(state.has_startable_task(), Ok(true))
@@ -216,7 +216,7 @@ async fn handle_download_outcome(
     outcome: CommandResult<()>,
     cancel_token: &FetchCancelToken,
 ) -> CommandResult<()> {
-    let Err(error) = outcome else {
+    let Err(mut error) = outcome else {
         return Ok(());
     };
     if cancel_token.is_cancelled() && !matches!(state.task_status(&task.id), Ok(TaskStatus::Muxing))
@@ -235,7 +235,10 @@ async fn handle_download_outcome(
                 state,
                 &task.id,
                 QueueLogLevel::Warning,
-                &format!("成品已生成，但收尾处理未完全完成：{}", error.message),
+                &format!(
+                    "成品已生成，但收尾处理未完全完成：{}",
+                    error.diagnostic_message()
+                ),
             )?;
         }
         _ => {
@@ -245,7 +248,7 @@ async fn handle_download_outcome(
                 .unwrap_or_default();
             if settings.auto_refresh_expired_urls
                 && matches!(state.task_status(&task.id), Ok(TaskStatus::Downloading))
-                && is_expired_url_error(&error.message)
+                && is_expired_url_error(&error.diagnostic_message())
                 && auto_refresh_attempts < MAX_AUTO_REFRESH_ATTEMPTS
             {
                 let attempt = auto_refresh_attempts + 1;
@@ -275,16 +278,19 @@ async fn handle_download_outcome(
                         return Ok(());
                     }
                     Err(refresh_error) => {
+                        let failure = crate::commands::CommandError::from(refresh_error);
                         emit_queue_log(
                             app,
                             state,
                             &task.id,
                             QueueLogLevel::Error,
                             &format!(
-                                "自动刷新过期链接失败：{}",
-                                crate::commands::CommandError::from(refresh_error).message
+                                "[stage=refresh_urls code={}] 自动刷新过期链接失败：{}",
+                                failure.code,
+                                failure.diagnostic_message()
                             ),
                         )?;
+                        error = failure;
                     }
                 }
             }
@@ -293,7 +299,16 @@ async fn handle_download_outcome(
                 state.finish_task_attempt(&task.id, TaskStatus::Failed, cancel_token)?
             {
                 events::emit(app, events::QUEUE_TASK_UPDATED, &failed)?;
-                emit_queue_log(app, state, &task.id, QueueLogLevel::Error, &error.message)?;
+                let message = if error.diagnostic_message().starts_with("[stage=") {
+                    error.diagnostic_message()
+                } else {
+                    format!(
+                        "[stage=task code={}] {}",
+                        error.code,
+                        error.diagnostic_message()
+                    )
+                };
+                emit_queue_log(app, state, &task.id, QueueLogLevel::Error, &message)?;
             }
         }
     }

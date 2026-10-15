@@ -29,6 +29,11 @@ describe('user-facing BPI failures', () => {
     vi.mocked(invoke).mockRejectedValue({ code: 'login_required', message: '登录状态可能已失效，请重新登录后重试。' })
     await expect(parseCreateSource({ input: 'fixture' })).rejects.toMatchObject({ code: 'login_required', message: '登录状态可能已失效，请重新登录后重试。' })
   })
+  it('keeps diagnostic causes separate from the user-facing message', async () => {
+    vi.mocked(invoke).mockRejectedValue({ code: 'bilibili_api_error', message: '操作失败', detail: 'API错误 [-400]: fixture cause' })
+    await expect(parseCreateSource({ input: 'fixture' })).rejects.toMatchObject({ detail: 'API错误 [-400]: fixture cause' })
+    await expect(parseCreateSource({ input: 'fixture' })).rejects.not.toThrow('fixture cause')
+  })
   it.each([
     ['course_preview_only', '当前账号只能试看此分集，请登录已购买该课程的账号后重试。'],
     ['drm_protected', '该分集使用 DRM 加密，BDL 暂不支持下载。请前往哔哩哔哩观看。'],

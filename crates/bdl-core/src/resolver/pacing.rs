@@ -64,9 +64,16 @@ impl ResolveGate {
             .is_err_and(|err| is_source_restriction(&err.to_string()))
         {
             state.stopped = true;
-            return Err(error(
-                "source restriction: server rejected or requested verification; stopped without retry; wait before manually resuming (waiting does not guarantee access)",
-            ));
+            return Err(error(&format!(
+                "source restriction: server rejected or requested verification; stopped without retry; wait before manually resuming (waiting does not guarantee access); original error: {}",
+                crate::account::redact_sensitive(
+                    &result
+                        .as_ref()
+                        .err()
+                        .expect("restriction error")
+                        .to_string()
+                )
+            )));
         }
         result
     }
@@ -134,11 +141,11 @@ mod tests {
             "HTTP 403",
         ] {
             let gate = ResolveGate::new(ResolvePolicy::default());
-            assert!(
-                gate.run(async { Err::<(), _>(BdlError::Bpi(message.into())) })
-                    .await
-                    .is_err()
-            );
+            let failure = gate
+                .run(async { Err::<(), _>(BdlError::Bpi(message.into())) })
+                .await
+                .unwrap_err();
+            assert!(failure.to_string().contains(message));
             let called = AtomicUsize::new(0);
             assert!(
                 gate.run(async {

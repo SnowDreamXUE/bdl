@@ -4,7 +4,7 @@ import UiButton from '../../ui/Button.vue';
 import UiInlineNotice from '../../ui/InlineNotice.vue';
 import type { FileRemovalController } from './useFileRemoval';
 const { controller } = defineProps<{ controller: FileRemovalController }>();
-const { kind, open, busy, executing, preview, error, canConfirm, confirm, refresh } = controller;
+const { kind, open, busy, executing, preview, error, errorDetails, copied, copyNotice, copyError, canConfirm, confirm, refresh } = controller;
 const bytes = (value: number) => value >= 1024 ** 3 ? `${(value / 1024 ** 3).toFixed(1)} GB` : value >= 1024 ** 2 ? `${(value / 1024 ** 2).toFixed(1)} MB` : `${Math.ceil(value / 1024)} KB`;
 </script>
 <template>
@@ -29,7 +29,13 @@ const bytes = (value: number) => value >= 1024 ** 3 ? `${(value / 1024 ** 3).toF
       </details>
     </template>
     <UiInlineNotice v-if="error" tone="danger">{{ error }}{{ kind === 'tasks' ? ' 未移除的任务记录仍保留；部分文件可能已清理。' : '' }}</UiInlineNotice>
+    <details v-if="errorDetails" class="removal-details">
+      <summary>错误详情</summary>
+      <ul><li>{{ errorDetails }}</li></ul>
+    </details>
+    <UiInlineNotice v-if="copyNotice" tone="danger">{{ copyNotice }}</UiInlineNotice>
     <template #footer>
+      <UiButton v-if="error" variant="secondary" @click="copyError">{{ copied ? '已复制' : '复制错误信息' }}</UiButton>
       <UiButton variant="secondary" :disabled="busy" @click="open = false">取消</UiButton>
       <UiButton v-if="!canConfirm" variant="secondary" :disabled="busy" @click="refresh">重新查看文件</UiButton>
       <UiButton variant="danger" :disabled="busy || !canConfirm || (kind === 'temp' && !preview?.file_count)" @click="confirm">{{ kind === 'tasks' ? '确认删除任务及文件' : '确认清理' }}</UiButton>

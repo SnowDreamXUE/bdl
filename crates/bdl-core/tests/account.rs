@@ -135,6 +135,21 @@ fn redact_sensitive_truncates_large_response_bodies() {
 }
 
 #[test]
+fn diagnostic_redaction_preserves_multiple_sources_with_a_bounded_total() {
+    let message = format!(
+        "{}\nsource=3 cause=last-source token=private-token\nCookie: SESSDATA=private-cookie",
+        "响应原因".repeat(1500)
+    );
+    let redacted = bdl_core::account::redact_diagnostic(&message);
+    assert!(redacted.contains("source=3 cause=last-source"));
+    assert!(!redacted.contains("private-token"));
+    assert!(!redacted.contains("private-cookie"));
+    let bounded = bdl_core::account::redact_diagnostic(&"界".repeat(70_000));
+    assert!(bounded.chars().count() <= 64 * 1024);
+    assert!(bounded.ends_with("...<truncated>"));
+}
+
+#[test]
 fn account_library_created_folders_are_paginated_and_linkable() {
     let page = AccountLibraryPage::from_created(
         CreatedFolderListData {

@@ -115,12 +115,14 @@ async fn http_and_api_restrictions_persist_across_independent_guards() {
             ReqwestTransport::send_request_builder(client.get(&url), "fixture"),
         )
         .await;
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("source restriction")
-        );
+        let failure = result.unwrap_err().to_string();
+        assert!(failure.contains("source restriction"));
+        if status.starts_with("429") {
+            assert!(failure.contains("HTTP 429"));
+            assert!(failure.contains("Retry-After=600s"));
+        } else {
+            assert!(failure.contains("code=-352"));
+        }
         server.join().unwrap();
         let independent = HttpGuard::new(path.clone(), Duration::ZERO, 10);
         assert!(

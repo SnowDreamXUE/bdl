@@ -162,6 +162,70 @@ async fn fetcher_falls_back_to_range_probe_when_head_is_rejected() {
 }
 
 #[tokio::test]
+async fn segment_body_failure_keeps_underlying_cause_and_range_context() {
+    let (url, server) = spawn_invalid_segment_body_server().await;
+    let dir = temp_case_dir("body-diagnostic").await;
+    let mut resource = resource(url.clone(), &dir, "video.bin");
+    resource
+        .current_urls
+        .extend([format!("{url}&source=2"), format!("{url}&source=3")]);
+    let fetcher = ReqwestFetcher::with_config(FetchConfig {
+        max_retries: 0,
+        segment_count: 2,
+        ..FetchConfig::default()
+    })
+    .unwrap();
+    let failure = fetcher
+        .fetch(&resource, None)
+        .await
+        .unwrap_err()
+        .to_string();
+    server.abort();
+    assert!(failure.contains("读取分段响应失败"), "{failure}");
+    assert!(
+        failure.contains("error decoding response body"),
+        "{failure}"
+    );
+    assert!(failure.contains("cause="), "{failure}");
+    assert!(failure.to_lowercase().contains("invalid gzip"), "{failure}");
+    assert!(failure.contains("segment="), "{failure}");
+    assert!(failure.contains("range="), "{failure}");
+    assert!(failure.contains("content_encoding="), "{failure}");
+    assert!(!failure.contains("private-token"), "{failure}");
+    for source in 1..=3 {
+        assert!(
+            failure.contains(&format!("source={source} host=")),
+            "{failure}"
+        );
+    }
+    assert!(!resource.target_path.exists());
+}
+
+#[tokio::test]
+async fn fetcher_switches_to_backup_after_segment_response_body_failure() {
+    let (bad_url, bad_server) = spawn_invalid_segment_body_server().await;
+    let expected = b"backup media bytes".to_vec();
+    let backup = TestServer::spawn(expected.clone(), 0).await;
+    let dir = temp_case_dir("body-fallback").await;
+    let mut resource = resource(bad_url, &dir, "video.bin");
+    resource.current_urls.push(backup.url());
+    let fetcher = ReqwestFetcher::with_config(FetchConfig {
+        max_retries: 0,
+        segment_count: 2,
+        ..FetchConfig::default()
+    })
+    .unwrap();
+    let result = fetcher.fetch(&resource, None).await;
+    bad_server.abort();
+    result.expect("must try backup after a response-body failure");
+    assert!(backup.get_count() > 0);
+    assert_eq!(
+        tokio::fs::read(&resource.target_path).await.unwrap(),
+        expected
+    );
+}
+
+#[tokio::test]
 async fn cli_restriction_mode_stops_before_cdn_fallback_or_retry() {
     let blocked = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/blocked", blocked.local_addr().unwrap());
@@ -607,6 +671,34 @@ async fn temp_case_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("bdl-{name}-{}", Uuid::new_v4()));
     tokio::fs::create_dir_all(&dir).await.unwrap();
     dir
+}
+
+async fn spawn_invalid_segment_body_server() -> (String, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!(
+        "http://{}/video?token=private-token",
+        listener.local_addr().unwrap()
+    );
+    let server = tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            tokio::spawn(async move {
+                let mut buffer = [0; 4096];
+                let read = stream.read(&mut buffer).await.unwrap();
+                let request = String::from_utf8_lossy(&buffer[..read]);
+                let response = if request.starts_with("HEAD ") {
+                    "HTTP/1.1 200 OK\r\nContent-Length: 1048576\r\nConnection: close\r\n\r\n"
+                } else {
+                    "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-524287/1048576\r\nContent-Encoding: gzip\r\nContent-Length: 12\r\nConnection: close\r\n\r\ninvalid-gzip"
+                };
+                stream.write_all(response.as_bytes()).await.unwrap();
+                stream.shutdown().await.unwrap();
+            });
+        }
+    });
+    (url, server)
 }
 
 async fn spawn_stalled_server() -> (String, oneshot::Receiver<()>) {

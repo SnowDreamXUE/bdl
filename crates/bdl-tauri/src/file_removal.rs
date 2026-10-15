@@ -23,6 +23,29 @@ fn lock_error() -> BdlError {
     error("文件清理状态锁不可用。")
 }
 
+fn file_io_error(operation: &str, path: &Path, cause: std::io::Error) -> BdlError {
+    let code = if cause.kind() == ErrorKind::PermissionDenied {
+        "file_access_denied"
+    } else {
+        "file_io_error"
+    };
+    #[cfg(windows)]
+    let code = match cause.raw_os_error() {
+        Some(32 | 33) => "file_in_use",
+        Some(19) => "file_read_only",
+        Some(21 | 53 | 67 | 1231) => "storage_unavailable",
+        Some(112) => "disk_full",
+        _ => code,
+    };
+    error(format!(
+        "[stage=file_cleanup code={code}] {operation}失败：{}；os_error={}；{cause}",
+        path.display(),
+        cause
+            .raw_os_error()
+            .map_or_else(|| "none".to_owned(), |code| code.to_string())
+    ))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct FileStamp {
     size: u64,
@@ -185,7 +208,7 @@ fn validate_ancestors(path: &Path) -> BdlResult<()> {
                     )));
                 }
             }
-            Err(e) => return Err(e.into()),
+            Err(e) => return Err(file_io_error("读取路径信息", ancestor, e)),
         }
     }
     Ok(())
@@ -195,7 +218,7 @@ fn stamp(path: &Path) -> BdlResult<Option<FileStamp>> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(m) => m,
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e.into()),
+        Err(e) => return Err(file_io_error("读取文件信息", path, e)),
     };
     if !metadata.is_file() {
         return Err(error(format!("只允许清理普通文件：{}", path.display())));
@@ -213,14 +236,16 @@ fn stamp(path: &Path) -> BdlResult<Option<FileStamp>> {
         let file = fs::OpenOptions::new()
             .access_mode(FILE_READ_ATTRIBUTES)
             .open(path)
-            .map_err(|e| error(format!("无法读取文件信息：{}；{e}", path.display())))?;
+            .map_err(|e| file_io_error("读取文件信息", path, e))?;
         windows_identity(&file)?
     };
     #[cfg(not(any(unix, windows)))]
     let identity = (0, 0);
     Ok(Some(FileStamp {
         size: metadata.len(),
-        modified: metadata.modified()?,
+        modified: metadata
+            .modified()
+            .map_err(|e| file_io_error("读取文件时间", path, e))?,
         identity,
     }))
 }
@@ -260,16 +285,13 @@ fn delete_file(file: &LocalFile) -> BdlResult<bool> {
             .access_mode(FILE_READ_ATTRIBUTES | DELETE)
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
             .open(&file.path)
-            .map_err(|e| {
-                error(format!(
-                    "无法删除文件：{}；请检查删除权限或文件占用。{e}",
-                    file.path.display()
-                ))
-            })?;
-        let metadata = handle.metadata()?;
+            .map_err(|e| file_io_error("打开待删除文件", &file.path, e))?;
+        let metadata = handle
+            .metadata()
+            .map_err(|e| file_io_error("读取文件信息", &file.path, e))?;
         if metadata.permissions().readonly() {
             return Err(error(format!(
-                "文件为只读，未删除：{}",
+                "[stage=file_cleanup code=file_read_only] 文件为只读，未删除：{}",
                 file.path.display()
             )));
         }
@@ -290,16 +312,16 @@ fn delete_file(file: &LocalFile) -> BdlResult<bool> {
             )
         } == 0
         {
-            return Err(error(format!(
-                "无法删除文件：{}；{}",
-                file.path.display(),
-                std::io::Error::last_os_error()
-            )));
+            return Err(file_io_error(
+                "删除文件",
+                &file.path,
+                std::io::Error::last_os_error(),
+            ));
         }
     }
     #[cfg(not(windows))]
     {
-        fs::remove_file(&file.path)?;
+        fs::remove_file(&file.path).map_err(|e| file_io_error("删除文件", &file.path, e))?;
     }
     Ok(true)
 }
@@ -553,7 +575,34 @@ impl AppState {
         .await
         .map_err(|_| error("任务仍在停止或导出，尚未清理任何文件。请稍后重试。"))?
     }
+    fn record_cleanup_failure(&self, stage: &str, ids: &[String], failure: &BdlError) {
+        let raw = failure.to_string();
+        let code = bdl_core::diagnostics::classify_failure(&raw)
+            .map_or("cleanup_failed", |rule| rule.code.as_str());
+        let message = bdl_core::account::redact_diagnostic(&format!(
+            "[stage={stage} code={code}] 文件清理失败：{raw}"
+        ));
+        tracing::warn!(stage, code, task_ids = ?ids, detail = %message, "File cleanup failed");
+        for id in ids {
+            // Keep the original failure even if recording it also fails.
+            if let Err(error) = self.append_task_log(bdl_core::queue::QueueLogEntry {
+                task_id: id.clone(),
+                level: bdl_core::queue::QueueLogLevel::Warning,
+                message: message.clone(),
+                created_at: chrono::Utc::now().to_rfc3339(),
+            }) {
+                tracing::warn!(detail = %bdl_core::account::redact_sensitive(&error.to_string()), "Failed to record cleanup failure");
+            }
+        }
+    }
     pub(crate) async fn stop_and_remove_task(&self, task_id: &str) -> BdlResult<bool> {
+        let result = self.stop_and_remove_task_inner(task_id).await;
+        if let Err(error) = &result {
+            self.record_cleanup_failure("remove_task", &[task_id.to_owned()], error);
+        }
+        result
+    }
+    async fn stop_and_remove_task_inner(&self, task_id: &str) -> BdlResult<bool> {
         if !self.queue_snapshot()?.iter().any(|t| t.id == task_id) {
             return Ok(false);
         }
@@ -663,13 +712,12 @@ impl AppState {
                         &PathBuf::from(relative_path),
                     )?)?
                 };
-                if seen_paths.insert(relative.clone()) {
-                    if let Some(document) = self
+                if seen_paths.insert(relative.clone())
+                    && let Some(document) = self
                         .mobile_storage()
                         .resolve_document(tree_uri, &relative)?
-                    {
-                        protected_documents.insert(document_key(&document.document_uri)?);
-                    }
+                {
+                    protected_documents.insert(document_key(&document.document_uri)?);
                 }
             }
         }
@@ -732,15 +780,14 @@ impl AppState {
         store
             .entries
             .retain(|_, (time, _)| time.elapsed() < Duration::from_secs(300));
-        if store.entries.len() >= 16 {
-            if let Some(oldest) = store
+        if store.entries.len() >= 16
+            && let Some(oldest) = store
                 .entries
                 .iter()
                 .min_by_key(|(_, (time, _))| *time)
                 .map(|(key, _)| key.clone())
-            {
-                store.entries.remove(&oldest);
-            }
+        {
+            store.entries.remove(&oldest);
         }
         let token = uuid::Uuid::new_v4().to_string();
         let preview = RemovalPreview::from_plan(token.clone(), &plan);
@@ -762,10 +809,24 @@ impl AppState {
     }
     pub(crate) fn preview_task_deletion(&self, ids: &[String]) -> BdlResult<RemovalPreview> {
         let queue = self.queue_snapshot()?;
-        self.save_preview(self.task_plan(&queue, ids)?)
+        let result = self
+            .task_plan(&queue, ids)
+            .and_then(|plan| self.save_preview(plan));
+        if let Err(error) = &result {
+            self.record_cleanup_failure("delete_preview", ids, error);
+        }
+        result
     }
     pub(crate) async fn delete_task_files(&self, token: &str) -> BdlResult<Vec<String>> {
         let approved = self.consume_preview(token)?;
+        let ids = approved.task_ids.clone();
+        let result = self.delete_task_files_inner(approved).await;
+        if let Err(error) = &result {
+            self.record_cleanup_failure("delete_files", &ids, error);
+        }
+        result
+    }
+    async fn delete_task_files_inner(&self, approved: Plan) -> BdlResult<Vec<String>> {
         if approved.task_ids.is_empty() {
             return Err(error("确认类型不匹配。"));
         }
@@ -902,10 +963,10 @@ impl AppState {
             .collect::<BdlResult<Vec<_>>>()?;
         // Revalidate the entire preview before the first unlink.
         for file in &candidates {
-            if let Some(current) = stamp(&file.path)? {
-                if current != file.stamp {
-                    return Err(error("临时文件已变化，请重新预览后清理。"));
-                }
+            if let Some(current) = stamp(&file.path)?
+                && current != file.stamp
+            {
+                return Err(error("临时文件已变化，请重新预览后清理。"));
             }
         }
         let mut removed = 0;
@@ -1059,6 +1120,80 @@ mod tests {
     }
     fn write(path: &Path) {
         fs::write(path, b"fixture payload").unwrap();
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn deletion_failure_records_operation_path_and_system_code_without_losing_task() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let fixture = Fixture::new();
+        let task = fixture.task("locked-delete");
+        write(&task.output_path);
+        fixture.insert(vec![task.clone()]);
+        let preview = fixture
+            .state
+            .preview_task_deletion(std::slice::from_ref(&task.id))
+            .unwrap();
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&task.output_path)
+            .unwrap();
+        let failure = fixture
+            .state
+            .delete_task_files(&preview.token)
+            .await
+            .unwrap_err();
+        assert!(failure.to_string().contains("code=file_in_use"));
+        let logs = fixture.state.task_logs(&task.id, 10).unwrap();
+        assert!(logs.iter().any(|log| {
+            log.level == bdl_core::queue::QueueLogLevel::Warning
+                && log.message.contains("stage=delete_files")
+                && log.message.contains("os_error=32")
+                && log
+                    .message
+                    .contains(&task.output_path.display().to_string())
+        }));
+        assert!(fixture.state.task_snapshot(&task.id).is_ok());
+        assert!(task.output_path.exists());
+        drop(held);
+        fixture.state.stop_and_remove_task(&task.id).await.unwrap();
+        assert!(task.output_path.exists());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn readonly_deletion_failure_is_distinct_from_account_permissions() {
+        let fixture = Fixture::new();
+        let task = fixture.task("readonly-delete");
+        write(&task.output_path);
+        fixture.insert(vec![task.clone()]);
+        let original_permissions = fs::metadata(&task.output_path).unwrap().permissions();
+        let mut permissions = original_permissions.clone();
+        permissions.set_readonly(true);
+        fs::set_permissions(&task.output_path, permissions.clone()).unwrap();
+        let preview = fixture
+            .state
+            .preview_task_deletion(std::slice::from_ref(&task.id))
+            .unwrap();
+        let result = fixture.state.delete_task_files(&preview.token).await;
+        // Restore only the test-owned file before asserting, including on failure.
+        fs::set_permissions(&task.output_path, original_permissions).unwrap();
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("code=file_read_only")
+        );
+        assert!(fixture.state.task_snapshot(&task.id).is_ok());
+        assert!(
+            fixture
+                .state
+                .task_logs(&task.id, 10)
+                .unwrap()
+                .iter()
+                .any(|log| log.message.contains("code=file_read_only"))
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -1215,7 +1350,7 @@ mod tests {
         fixture.insert(vec![task.clone()]);
         let preview = fixture
             .state
-            .preview_task_deletion(&[task.id.clone()])
+            .preview_task_deletion(std::slice::from_ref(&task.id))
             .unwrap();
         assert_eq!(preview.file_count, 1);
         backend
@@ -1235,7 +1370,7 @@ mod tests {
         assert!(backend.files.lock().unwrap().contains_key(uri));
         let preview = fixture
             .state
-            .preview_task_deletion(&[task.id.clone()])
+            .preview_task_deletion(std::slice::from_ref(&task.id))
             .unwrap();
         backend
             .refuse_delete
@@ -1262,7 +1397,7 @@ mod tests {
         fixture.insert(vec![task.clone()]);
         let preview = fixture
             .state
-            .preview_task_deletion(&[task.id.clone()])
+            .preview_task_deletion(std::slice::from_ref(&task.id))
             .unwrap();
         assert_eq!(preview.file_count, 0);
         assert!(!preview.preserved.is_empty());
@@ -1279,7 +1414,7 @@ mod tests {
         fixture.insert(vec![task.clone()]);
         let preview = fixture
             .state
-            .preview_task_deletion(&[task.id.clone()])
+            .preview_task_deletion(std::slice::from_ref(&task.id))
             .unwrap();
         fixture
             .state
@@ -1326,7 +1461,7 @@ mod tests {
         fixture.insert(vec![task.clone(), queued]);
         let preview = fixture
             .state
-            .preview_task_deletion(&[task.id.clone()])
+            .preview_task_deletion(std::slice::from_ref(&task.id))
             .unwrap();
         assert_eq!(preview.file_count, 0);
         fixture
@@ -1371,7 +1506,7 @@ mod tests {
         assert!(
             fixture
                 .state
-                .preview_task_deletion(&[task.id.clone()])
+                .preview_task_deletion(std::slice::from_ref(&task.id))
                 .is_err()
         );
         assert!(fixture.state.stop_and_remove_task(&task.id).await.is_err());
@@ -1466,7 +1601,7 @@ mod tests {
         write(&other);
         let preview = fixture
             .state
-            .preview_task_deletion(&[task.id.clone()])
+            .preview_task_deletion(std::slice::from_ref(&task.id))
             .unwrap();
         assert!(
             preview
@@ -1513,7 +1648,7 @@ mod tests {
         write(&task.output_path);
         let preview = fixture
             .state
-            .preview_task_deletion(&[task.id.clone()])
+            .preview_task_deletion(std::slice::from_ref(&task.id))
             .unwrap();
         fs::write(&task.output_path, b"replacement content").unwrap();
         write(&task.resources[0].temp_path);
@@ -1528,7 +1663,7 @@ mod tests {
         assert!(task.resources[0].temp_path.exists());
         let preview = fixture
             .state
-            .preview_task_deletion(&[task.id.clone()])
+            .preview_task_deletion(std::slice::from_ref(&task.id))
             .unwrap();
         write(&task.resources[0].target_path);
         assert!(
@@ -1541,7 +1676,7 @@ mod tests {
         assert!(task.output_path.exists());
         let preview = fixture
             .state
-            .preview_task_deletion(&[task.id.clone()])
+            .preview_task_deletion(std::slice::from_ref(&task.id))
             .unwrap();
         fixture
             .state
@@ -1564,7 +1699,7 @@ mod tests {
         write(&task.resources[0].temp_path);
         let preview = fixture
             .state
-            .preview_task_deletion(&[task.id.clone()])
+            .preview_task_deletion(std::slice::from_ref(&task.id))
             .unwrap();
         assert_eq!(preview.file_count, 0);
         assert!(!preview.preserved.is_empty());
@@ -1643,7 +1778,7 @@ mod tests {
         assert!(
             fixture
                 .state
-                .preview_task_deletion(&[task.id.clone()])
+                .preview_task_deletion(std::slice::from_ref(&task.id))
                 .is_err()
         );
         assert!(task.output_path.is_dir());
@@ -1660,7 +1795,7 @@ mod tests {
         assert!(
             fixture
                 .state
-                .preview_task_deletion(&[task.id.clone()])
+                .preview_task_deletion(std::slice::from_ref(&task.id))
                 .is_err()
         );
         assert!(task.resources[0].target_path.exists());
@@ -1681,7 +1816,7 @@ mod tests {
             .unwrap();
         let preview = fixture
             .state
-            .preview_task_deletion(&[task.id.clone()])
+            .preview_task_deletion(std::slice::from_ref(&task.id))
             .unwrap();
         assert!(
             fixture
@@ -1695,7 +1830,7 @@ mod tests {
         drop(handle);
         let preview = fixture
             .state
-            .preview_task_deletion(&[task.id.clone()])
+            .preview_task_deletion(std::slice::from_ref(&task.id))
             .unwrap();
         fixture
             .state
@@ -1751,7 +1886,7 @@ mod tests {
                 if full {
                     let preview = fixture
                         .state
-                        .preview_task_deletion(&[task.id.clone()])
+                        .preview_task_deletion(std::slice::from_ref(&task.id))
                         .unwrap();
                     fixture
                         .state
@@ -1797,7 +1932,7 @@ mod tests {
                 write(&task.resources[0].temp_path);
                 let preview = fixture
                     .state
-                    .preview_task_deletion(&[task.id.clone()])
+                    .preview_task_deletion(std::slice::from_ref(&task.id))
                     .unwrap();
                 let removal = async {
                     if full {
@@ -1928,7 +2063,7 @@ mod tests {
             if full {
                 let preview = fixture
                     .state
-                    .preview_task_deletion(&[task.id.clone()])
+                    .preview_task_deletion(std::slice::from_ref(&task.id))
                     .unwrap();
                 fixture
                     .state
@@ -1960,12 +2095,12 @@ mod tests {
             fixture.insert(vec![task.clone()]);
             let old = fixture
                 .state
-                .preview_task_deletion(&[task.id.clone()])
+                .preview_task_deletion(std::slice::from_ref(&task.id))
                 .unwrap();
             if full {
                 let current = fixture
                     .state
-                    .preview_task_deletion(&[task.id.clone()])
+                    .preview_task_deletion(std::slice::from_ref(&task.id))
                     .unwrap();
                 fixture
                     .state
@@ -1994,7 +2129,7 @@ mod tests {
         write(&task.resources[0].temp_path);
         let preview = fixture
             .state
-            .preview_task_deletion(&[task.id.clone()])
+            .preview_task_deletion(std::slice::from_ref(&task.id))
             .unwrap();
         let mux = async {
             token.cancelled().await;
@@ -2012,7 +2147,7 @@ mod tests {
         assert_durable_ids(&fixture, &["muxing"]);
         let preview = fixture
             .state
-            .preview_task_deletion(&[task.id.clone()])
+            .preview_task_deletion(std::slice::from_ref(&task.id))
             .unwrap();
         fixture
             .state
@@ -2050,7 +2185,7 @@ mod tests {
             let result = if full {
                 let preview = fixture
                     .state
-                    .preview_task_deletion(&[task.id.clone()])
+                    .preview_task_deletion(std::slice::from_ref(&task.id))
                     .unwrap();
                 fixture
                     .state
@@ -2085,7 +2220,7 @@ mod tests {
             if full {
                 let preview = fixture
                     .state
-                    .preview_task_deletion(&[task.id.clone()])
+                    .preview_task_deletion(std::slice::from_ref(&task.id))
                     .unwrap();
                 fixture
                     .state
@@ -2124,7 +2259,7 @@ mod tests {
         assert!(
             fixture
                 .state
-                .preview_task_deletion(&[task.id.clone()])
+                .preview_task_deletion(std::slice::from_ref(&task.id))
                 .is_err()
         );
         assert!(fixture.state.stop_and_remove_task(&task.id).await.is_err());
@@ -2152,7 +2287,7 @@ mod tests {
                 let result = if full {
                     let preview = fixture
                         .state
-                        .preview_task_deletion(&[task.id.clone()])
+                        .preview_task_deletion(std::slice::from_ref(&task.id))
                         .unwrap();
                     fixture
                         .state

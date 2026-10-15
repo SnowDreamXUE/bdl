@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { DownloadTask } from '../api/dto'
-import { createTaskDiagnosticView, createTransferTaskView } from './transferView'
+import { createTaskDiagnosticView, createTransferTaskView, createTaskTimeline, redactDiagnosticMessage, redactLogMessage } from './transferView'
+import failureCases from '../../../../../crates/bdl-core/tests/fixtures/failure-diagnostics.json'
 
 const scheduledTask = (): DownloadTask => ({
   id: 'task:scheduled',
@@ -19,6 +20,46 @@ const scheduledTask = (): DownloadTask => ({
   },
   scheduled_at: '2026-07-10T13:30:00Z',
   speed_limit_bytes_per_second: null,
+})
+
+describe('failure diagnostics', () => {
+  const task = { ...scheduledTask(), status: 'failed' as const, scheduled_at: null }
+  const log = (message: string, created_at = '2026-07-10T12:00:00Z') => ({ task_id: task.id, level: 'error' as const, message, created_at })
+
+  it('keeps all source diagnostics for copying while limiting displayed logs', () => {
+    const message = `${'response cause '.repeat(400)}\nsource=3 cause=final-cause token=private-token\nCookie: SESSDATA=private-cookie`;
+    const full = redactDiagnosticMessage(message);
+    expect(full).toContain('source=3 cause=final-cause');
+    expect(full).not.toContain('private-token');
+    expect(full).not.toContain('private-cookie');
+    expect(full).not.toContain('<truncated>');
+    expect(redactLogMessage(message)).toContain('<truncated>');
+  })
+
+  it.each(failureCases)('classifies $message', ({ message, summary, action }) => {
+    const view = createTransferTaskView(task, 0, [log(message)])
+    const diagnostic = createTaskDiagnosticView(task, [log(message)])
+    expect(view.issueLabel).toBe(summary)
+    expect(diagnostic.recommendedAction).toBe(action === 'retry' ? 'retry' : action === 'refresh_urls_and_retry' ? 'refresh_retry' : action === 'login_then_retry' ? 'retry' : null)
+  })
+
+  it('uses the latest failure rather than combining unrelated attempts', () => {
+    const logs = [log('Cookie 已失效'), log('下载请求失败: HTTP 403 Forbidden', '2026-07-10T12:02:00Z')]
+    expect(createTransferTaskView(task, 0, logs).issueLabel).toBe('源站拒绝访问')
+  })
+
+  it('does not diagnose an earlier attempt after a new attempt has started', () => {
+    const logs = [log('Cookie 已失效'), { ...log('开始下载任务', '2026-07-10T12:02:00Z'), level: 'info' as const }]
+    expect(createTransferTaskView(task, 0, logs).issueLabel).toBe('任务失败')
+  })
+
+  it('keeps deletion errors separate from a completed download', () => {
+    const completed = { ...task, status: 'completed' as const }
+    const logs = [{ ...log('[stage=delete_files code=file_in_use] 文件清理失败：os_error=32'), level: 'warning' as const }]
+    expect(createTransferTaskView(completed, 100, logs).statusLabel).toBe('已完成')
+    expect(createTaskDiagnosticView(completed, logs).tone).toBe('success')
+    expect(createTaskTimeline(completed, logs)[0].title).toBe('文件清理失败：文件被占用')
+  })
 })
 
 describe('scheduled transfer task view', () => {

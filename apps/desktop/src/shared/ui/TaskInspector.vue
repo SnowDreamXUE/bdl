@@ -8,6 +8,7 @@ import {
   createTaskDiagnosticView,
   createTaskTimeline,
   redactLogMessage,
+  redactDiagnosticMessage,
   resourceIntentText,
   statusLabel,
 } from '../stores/transferView'
@@ -21,6 +22,7 @@ import UiTabs from './Tabs.vue'
 import ExternalLinkButton from './ExternalLinkButton.vue'
 import { bilibiliTaskUrl } from '../utils/bilibiliLinks'
 import { isMobilePlatform } from '../platform/environment'
+import { captureDiagnosticEnvironment } from '../utils/diagnosticEnvironment'
 
 const { task, progress, logs, logsLoading = false } = defineProps<{
   task: DownloadTask | null
@@ -37,6 +39,7 @@ const ui = useUiStore()
 const selectedTab = ref('overview')
 const tabTouched = ref(false)
 const copied = ref(false)
+const logsCopied = ref(false)
 const exportingDiagnostics = ref(false)
 const exportNotice = ref('')
 const transferCapabilities = { canOpenOutput: !isMobilePlatform() }
@@ -70,9 +73,21 @@ const taskPageUrl = computed(() => (task ? bilibiliTaskUrl(task) : null))
 const redactedLogs = computed(() =>
   logs.map((log) => ({
     ...log,
-    message: redactLogMessage(log.message),
+    message: redactDiagnosticMessage(log.message),
   })),
 )
+const mediaSelectionText = computed(() => {
+  const selection = task?.media_selection
+  return `流选择: video_quality=${selection?.video_quality ?? '--'} audio_quality=${selection?.audio_quality ?? '--'} codec=${selection?.video_codec ?? '--'} container=${selection?.container ?? '--'}`
+})
+const rawLogText = computed(() => task && redactedLogs.value.length ? [
+  `任务: ${task.title}`,
+  `任务 ID: ${task.id}`,
+  mediaSelectionText.value,
+  `状态: ${statusLabel(task.status)}`,
+  '',
+  ...redactedLogs.value.map((log) => `[${log.level}] ${log.created_at} ${log.message}`),
+].join('\n') : '')
 const diagnosticText = computed(() => {
   if (!task || !diagnostic.value) {
     return ''
@@ -82,9 +97,11 @@ const diagnosticText = computed(() => {
     `任务: ${task.title}`,
     `状态: ${statusLabel(task.status)}`,
     `诊断: ${diagnostic.value.summary}`,
+    `原因: ${diagnostic.value.detail}`,
     `建议: ${diagnostic.value.recommendedActionLabel || '查看原始日志'}`,
     `影响: ${diagnostic.value.impact}`,
     `输出: ${task.output_path}`,
+    mediaSelectionText.value,
     '',
     '事件:',
     ...timeline.value.map((event) => `- ${formatEventTime(event.time)} ${event.title}: ${event.detail}`),
@@ -102,6 +119,7 @@ watch(
   () => task?.id,
   () => {
     tabTouched.value = false
+    logsCopied.value = false
     selectedTab.value = defaultTab()
   },
   { immediate: true },
@@ -127,13 +145,28 @@ const copyDiagnostics = async () => {
   }
 
   try {
-    await navigator.clipboard.writeText(diagnosticText.value)
+    const environment = await captureDiagnosticEnvironment()
+    await navigator.clipboard.writeText(`${environment}\n\n${diagnosticText.value}`)
     copied.value = true
     window.setTimeout(() => {
       copied.value = false
     }, 1600)
   } catch {
     copied.value = false
+    ui.pushToast('复制失败，请重试', 'danger')
+  }
+}
+
+const copyLogs = async () => {
+  if (!rawLogText.value) return
+  try {
+    const environment = await captureDiagnosticEnvironment()
+    await navigator.clipboard.writeText(`${environment}\n\n${rawLogText.value}`)
+    logsCopied.value = true
+    window.setTimeout(() => { logsCopied.value = false }, 1600)
+  } catch {
+    logsCopied.value = false
+    ui.pushToast('复制失败，请重试', 'danger')
   }
 }
 
@@ -302,7 +335,7 @@ const errorMessage = (error: unknown): string => {
       <section v-else class="tab-panel raw-panel">
         <UiSectionToolbar :label="`${redactedLogs.length} 条原始日志`">
           <template #actions>
-            <UiButton variant="ghost" @click="copyDiagnostics">{{ copied ? '已复制' : '复制诊断信息' }}</UiButton>
+            <UiButton variant="secondary" :disabled="logsLoading || !redactedLogs.length" @click="copyLogs">{{ logsCopied ? '已复制' : '一键复制' }}</UiButton>
             <UiButton variant="ghost" :disabled="exportingDiagnostics" @click="exportDiagnostics">
               {{ exportingDiagnostics ? '导出中' : '导出诊断' }}
             </UiButton>
@@ -313,7 +346,7 @@ const errorMessage = (error: unknown): string => {
           <UiInlineNotice v-if="exportNotice" tone="success">{{ exportNotice }}</UiInlineNotice>
           <div v-for="log in redactedLogs" :key="`${log.created_at}-${log.message}`" class="log-row">
             <span :class="`level-${log.level}`">{{ log.level }}</span>
-            <p>{{ log.message }}</p>
+            <p>{{ redactLogMessage(log.message) }}</p>
           </div>
           <UiEmptyState v-if="logsLoading && !redactedLogs.length" class="inspector-empty" title="日志加载中" layout="stacked" compact />
           <UiEmptyState v-else-if="!redactedLogs.length" class="inspector-empty" title="暂无日志" layout="stacked" compact />

@@ -49,7 +49,7 @@ use crate::mobile_storage::{ExportOutcome, ExportResult, MobileStorage};
 use crate::queue_worker::start as start_queue_worker;
 use crate::state::{AccountSnapshot, AppState, SettingsSnapshot, StartupRecoverySnapshot};
 use crate::task_execution::NotificationPermissionState;
-use crate::task_failure::{is_login_expired_error, is_private_resource_error};
+use bdl_core::diagnostics::classify_failure;
 
 pub type CommandResult<T> = Result<T, CommandError>;
 
@@ -57,20 +57,37 @@ pub type CommandResult<T> = Result<T, CommandError>;
 pub struct CommandError {
     pub code: String,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 impl From<BdlError> for CommandError {
     fn from(error: BdlError) -> Self {
-        if matches!(&error, BdlError::Bpi(_)) {
-            tracing::warn!(
-                code = command_error_code(&error),
-                detail = %bdl_core::account::redact_sensitive(&error.to_string()),
-                "Bilibili operation failed"
-            );
-        }
+        let raw = match &error {
+            BdlError::Fetch { .. } | BdlError::Platform { .. } => {
+                bdl_core::account::redact_diagnostic(&error.to_string())
+            }
+            _ => bdl_core::account::redact_sensitive(&error.to_string()),
+        };
+        let code = command_error_code(&error).to_owned();
+        let message = bdl_core::account::redact_sensitive(
+            &command_error_message(&error).unwrap_or_else(|| raw.clone()),
+        );
+        let detail = (raw != message).then_some(raw);
+        tracing::warn!(code, detail = ?detail, "BDL operation failed");
         Self {
-            code: command_error_code(&error).to_owned(),
-            message: command_error_message(&error).unwrap_or_else(|| error.to_string()),
+            code,
+            message,
+            detail,
+        }
+    }
+}
+
+impl CommandError {
+    pub(crate) fn diagnostic_message(&self) -> String {
+        match &self.detail {
+            Some(detail) => format!("{}\n原始错误：{detail}", self.message),
+            None => self.message.clone(),
         }
     }
 }
@@ -81,63 +98,42 @@ fn command_error_code(error: &BdlError) -> &'static str {
         BdlError::UnsupportedSource { .. } => "unsupported_source",
         BdlError::DrmProtected => "drm_protected",
         BdlError::CoursePreviewOnly => "course_preview_only",
-        BdlError::Platform { .. } => "platform_error",
         BdlError::Mux(MuxError::FfmpegNotFound { .. }) => "missing_ffmpeg",
-        BdlError::Io(error) if error.kind() == ErrorKind::PermissionDenied => {
-            "unwritable_save_directory"
-        }
-        BdlError::Fetch { message } | BdlError::Bpi(message)
-            if is_bilibili_request_rejected(message) =>
-        {
-            "bilibili_request_rejected"
-        }
-        BdlError::Fetch { message } | BdlError::Bpi(message)
-            if is_private_resource_error(message) =>
-        {
-            "private_resource"
-        }
-        BdlError::Fetch { message } | BdlError::Bpi(message) if is_login_expired_error(message) => {
-            "login_required"
+        BdlError::Io(error) if error.kind() == ErrorKind::PermissionDenied => "file_access_denied",
+        _ if classify_failure(&error.to_string()).is_some() => {
+            &classify_failure(&error.to_string())
+                .expect("classified failure")
+                .code
         }
         BdlError::Bpi(message) if message.contains("failed to decode response") => {
             "bilibili_response_decode_failed"
         }
         BdlError::Bpi(_) => "bilibili_api_error",
+        BdlError::Platform { .. } => "platform_error",
         _ => "core_error",
     }
 }
 
 fn command_error_message(error: &BdlError) -> Option<String> {
     match error {
+        BdlError::DrmProtected | BdlError::CoursePreviewOnly => Some(error.to_string()),
         BdlError::InvalidInput { message } => Some(message.clone()),
         BdlError::UnsupportedSource { kind } => Some(format!("暂不支持 `{kind}` 类型的来源。")),
-        BdlError::Platform { message } => Some(message.clone()),
         BdlError::Mux(MuxError::FfmpegNotFound { .. }) => {
             Some("未找到 FFmpeg，请在设置中配置 FFmpeg 路径。".to_owned())
         }
         BdlError::Io(error) if error.kind() == ErrorKind::PermissionDenied => {
-            Some("保存目录不可写，请检查权限或更换保存目录。".to_owned())
+            Some("本地文件访问被拒绝，请检查文件或目录权限。".to_owned())
         }
-        BdlError::Fetch { message } | BdlError::Bpi(message)
-            if is_bilibili_request_rejected(message) =>
-        {
-            Some(
-                "Bilibili 暂时拒绝了请求（HTTP 412），可能是访问过于频繁或触发风控。请稍后重试；持续出现时请重新登录。"
-                    .to_owned(),
-            )
-        }
-        BdlError::Fetch { message } | BdlError::Bpi(message)
-            if is_private_resource_error(message) =>
-        {
-            Some("资源不可访问，可能是私密稿件、已失效或当前账号无权访问。".to_owned())
-        }
-        BdlError::Fetch { message } | BdlError::Bpi(message) if is_login_expired_error(message) => {
-            Some("登录状态可能已失效，请重新登录后重试。".to_owned())
+        _ if classify_failure(&error.to_string()).is_some() => {
+            let rule = classify_failure(&error.to_string()).expect("classified failure");
+            Some(format!("{}。{}", rule.summary, rule.detail))
         }
         BdlError::Bpi(message) if message.contains("failed to decode response") => Some(
             "解析失败，返回的数据暂时无法解析。请稍后重试；如果持续失败，请反馈问题。".to_owned(),
         ),
         BdlError::Bpi(_) => Some("操作失败，暂时无法获取 Bilibili 数据，请稍后重试。".to_owned()),
+        BdlError::Platform { message } => Some(message.clone()),
         _ => None,
     }
 }
@@ -161,13 +157,6 @@ mod course_error_tests {
         assert!(error.message.contains("只能试看"));
         assert!(error.message.contains("已购买"));
     }
-}
-
-fn is_bilibili_request_rejected(message: &str) -> bool {
-    let lower = message.to_ascii_lowercase();
-    lower.contains("status 412")
-        || lower.contains("http 412")
-        || lower.contains("412 precondition failed")
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1214,7 +1203,11 @@ async fn refresh_urls_and_retry(
             state,
             task_id,
             QueueLogLevel::Error,
-            &format!("刷新下载地址失败：{}", error.message),
+            &format!(
+                "[stage=refresh_urls code={}] 刷新下载地址失败：{}",
+                error.code,
+                error.diagnostic_message()
+            ),
         )?;
         return Err(error);
     }
@@ -1284,6 +1277,7 @@ pub async fn queue_delete_preview(
     })
     .await
     .map_err(|e| CommandError {
+        detail: None,
         code: "cleanup_failed".into(),
         message: e.to_string(),
     })?
@@ -1312,6 +1306,7 @@ pub async fn maintenance_temp_preview(
     tauri::async_runtime::spawn_blocking(move || app.state::<AppState>().preview_temp_cleanup())
         .await
         .map_err(|e| CommandError {
+            detail: None,
             code: "cleanup_failed".into(),
             message: e.to_string(),
         })?
@@ -1354,6 +1349,7 @@ pub fn queue_open_dir(
 pub fn open_external_url(app: AppHandle, url: String) -> CommandResult<()> {
     if !is_allowed_external_url(&url) {
         return Err(CommandError {
+            detail: None,
             code: "external_url_not_allowed".to_owned(),
             message: "该链接不在允许打开的列表中。".to_owned(),
         });
@@ -1362,6 +1358,7 @@ pub fn open_external_url(app: AppHandle, url: String) -> CommandResult<()> {
     app.opener()
         .open_url(url, None::<String>)
         .map_err(|error| CommandError {
+            detail: None,
             code: "open_url_failed".to_owned(),
             message: format!("打开链接失败：{error}"),
         })
@@ -1458,9 +1455,17 @@ pub async fn maintenance_cleanup_temp(
     })
     .await
     .map_err(|e| CommandError {
+        detail: None,
         code: "cleanup_failed".into(),
         message: e.to_string(),
     })?
+}
+
+#[tauri::command]
+pub async fn diagnostics_environment(
+    state: State<'_, AppState>,
+) -> CommandResult<crate::diagnostic_export::DiagnosticEnvironment> {
+    Ok(crate::diagnostic_export::collect_environment(&state).await?)
 }
 
 #[tauri::command]
@@ -1504,6 +1509,7 @@ pub async fn diagnostics_export(
         .collect::<BdlResult<Vec<_>>>()?;
 
     let report = serde_json::json!({
+        "environment": crate::diagnostic_export::collect_environment(&state).await?,
         "generated_at": Utc::now().to_rfc3339(),
         "version": crate::version(),
         "data_dir": state.data_dir(),
@@ -1945,7 +1951,17 @@ async fn run_download_task_inner(
             };
             let updated = state.update_resource_status(&task.id, &resource.id, resource_status)?;
             events::emit(app, events::QUEUE_TASK_UPDATED, &updated)?;
-            return Err(error.into());
+            let mut failure = CommandError::from(error);
+            failure.detail = Some(bdl_core::account::redact_diagnostic(&format!(
+                "[stage=download_{} code={}] resource={} target={} temp={}\n{}",
+                resource_label(resource),
+                failure.code,
+                resource.id,
+                resource.target_path.display(),
+                resource.temp_path.display(),
+                failure.diagnostic_message()
+            )));
+            return Err(failure);
         }
 
         let updated =
@@ -2443,6 +2459,7 @@ fn task_mux_label(task: &DownloadTask) -> &'static str {
 
 fn open_task_output_dir(app: &AppHandle, task: &DownloadTask) -> CommandResult<()> {
     let dir = task.output_path.parent().ok_or_else(|| CommandError {
+        detail: None,
         code: "invalid_output_path".to_owned(),
         message: format!("任务 `{}` 没有有效输出目录。", task.title),
     })?;
@@ -2454,6 +2471,7 @@ fn open_path(app: &AppHandle, path: &Path) -> CommandResult<()> {
     app.opener()
         .open_path(path.to_string_lossy().into_owned(), None::<String>)
         .map_err(|error| CommandError {
+            detail: None,
             code: "open_path_failed".to_owned(),
             message: format!("打开路径失败：{error}"),
         })
@@ -2558,6 +2576,7 @@ fn parse_archive_mode(value: &str) -> CommandResult<ArchiveMode> {
         "complete_archive" => Ok(ArchiveMode::CompleteArchive),
         "custom" => Ok(ArchiveMode::Custom),
         other => Err(CommandError {
+            detail: None,
             code: "invalid_archive_mode".to_owned(),
             message: format!("unknown archive mode `{other}`"),
         }),
@@ -3047,11 +3066,24 @@ mod tests {
 
         assert_eq!(parse.code, "parse_unrecognized");
         assert_eq!(ffmpeg.code, "missing_ffmpeg");
-        assert_eq!(permission.code, "unwritable_save_directory");
-        assert_eq!(login.code, "login_required");
+        assert_eq!(permission.code, "file_access_denied");
+        assert_eq!(login.code, "remote_forbidden");
+        assert!(login.diagnostic_message().contains("HTTP 403 Forbidden"));
         assert_eq!(private.code, "private_resource");
-        assert_eq!(rejected.code, "bilibili_request_rejected");
+        assert_eq!(rejected.code, "source_verification_required");
         assert!(rejected.message.contains("稍后重试"));
+    }
+
+    #[test]
+    fn command_error_preserves_cause_and_redacts_secrets_before_delivery() {
+        let error = super::CommandError::from(BdlError::Bpi(
+            "HTTP 429 Too Many Requests; Retry-After: 60\nCookie: SESSDATA=private-cookie\nhttps://cdn.test/video?token=private-token".into()
+        ));
+        assert_eq!(error.code, "source_rate_limited");
+        assert!(error.diagnostic_message().contains("HTTP 429"));
+        assert!(error.diagnostic_message().contains("Retry-After: 60"));
+        assert!(!error.diagnostic_message().contains("private-cookie"));
+        assert!(!error.diagnostic_message().contains("private-token"));
     }
 
     fn resource(intent: DownloadResourceIntent, current_urls: Vec<String>) -> DownloadResource {

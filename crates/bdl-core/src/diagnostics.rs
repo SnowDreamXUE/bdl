@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 
 use crate::queue::{
     DownloadResourceIntent, DownloadTask, QueueLogEntry, QueueLogLevel, ResourceStatus, TaskStatus,
@@ -22,6 +23,76 @@ pub struct TaskDiagnostic {
     pub failed_intent: Option<DownloadResourceIntent>,
 }
 
+/// Shared with the frontend so persisted legacy logs and new errors use the same guidance.
+#[derive(Debug, Deserialize)]
+pub struct FailureRule {
+    pub code: String,
+    pub summary: String,
+    pub detail: String,
+    pub recommended_action: RecommendedAction,
+    pub contains: Vec<String>,
+    pub http_statuses: Vec<u16>,
+}
+
+pub fn classify_failure(message: &str) -> Option<&'static FailureRule> {
+    static RULES: OnceLock<Vec<FailureRule>> = OnceLock::new();
+    let rules = RULES.get_or_init(|| {
+        serde_json::from_str(include_str!("diagnostic-rules.json"))
+            .expect("bundled diagnostic rules must be valid")
+    });
+    let lower = message.to_lowercase();
+    // A producer's contextual code takes priority over incidental words in paths or causes.
+    for marker in lower.split("code=").skip(1) {
+        if let Some(rule) = marker
+            .split_once(']')
+            .and_then(|(code, _)| rules.iter().find(|rule| rule.code == code))
+        {
+            return Some(rule);
+        }
+    }
+    rules.iter().find(|rule| {
+        rule.contains.iter().any(|text| lower.contains(text))
+            || rule
+                .http_statuses
+                .iter()
+                .any(|status| has_http_status(&lower, *status))
+    })
+}
+
+fn has_http_status(message: &str, status: u16) -> bool {
+    ["http ", "status ", "status code ", "状态码: ", "状态码："]
+        .iter()
+        .any(|prefix| {
+            let needle = format!("{prefix}{status}");
+            message.match_indices(&needle).any(|(offset, _)| {
+                !message
+                    .as_bytes()
+                    .get(offset + needle.len())
+                    .is_some_and(u8::is_ascii_digit)
+            })
+        })
+}
+
+pub fn latest_failure(logs: &[QueueLogEntry]) -> Option<&str> {
+    let attempt = logs
+        .iter()
+        .filter(|log| {
+            matches!(
+                log.message.as_str(),
+                "重试任务" | "开始下载任务" | "刷新下载地址"
+            )
+        })
+        .map(|log| &log.created_at)
+        .max();
+    logs.iter()
+        .filter(|log| {
+            log.level == QueueLogLevel::Error
+                && attempt.is_none_or(|start| &log.created_at >= start)
+        })
+        .max_by_key(|log| &log.created_at)
+        .map(|log| log.message.as_str())
+}
+
 pub fn diagnose_task(task: &DownloadTask, logs: &[QueueLogEntry]) -> TaskDiagnostic {
     let failed_intent = task.resources.iter().find_map(|resource| {
         matches!(
@@ -30,100 +101,11 @@ pub fn diagnose_task(task: &DownloadTask, logs: &[QueueLogEntry]) -> TaskDiagnos
         )
         .then_some(resource.intent)
     });
-    let error_text = logs
-        .iter()
-        .filter(|log| log.level == QueueLogLevel::Error)
-        .map(|log| log.message.as_str())
-        .collect::<Vec<_>>()
-        .join("\n")
-        .to_lowercase();
-
-    if contains_any(&error_text, &["404", "资源长度失败"]) {
+    if let Some(rule) = latest_failure(logs).and_then(classify_failure) {
         return TaskDiagnostic {
-            summary: "链接可能已过期".to_owned(),
-            detail: "B 站媒体直链有时效性，重新解析或刷新下载地址后再重试。".to_owned(),
-            recommended_action: RecommendedAction::RefreshUrlsAndRetry,
-            failed_intent,
-        };
-    }
-
-    if contains_any(
-        &error_text,
-        &[
-            "permission denied",
-            "access is denied",
-            "拒绝访问",
-            "保存目录不可写",
-            "readonly",
-        ],
-    ) {
-        return TaskDiagnostic {
-            summary: "保存目录不可写".to_owned(),
-            detail: "下载器无法写入目标目录，请检查目录权限、磁盘状态，或在设置中更换保存目录。"
-                .to_owned(),
-            recommended_action: RecommendedAction::InspectRawLog,
-            failed_intent,
-        };
-    }
-
-    if contains_any(
-        &error_text,
-        &["private", "私密", "不可见", "无权访问", "访问受限"],
-    ) {
-        return TaskDiagnostic {
-            summary: "资源不可访问".to_owned(),
-            detail: "资源可能是私密稿件、已失效，或当前账号没有访问权限。".to_owned(),
-            recommended_action: RecommendedAction::LoginThenRetry,
-            failed_intent,
-        };
-    }
-
-    if contains_any(
-        &error_text,
-        &[
-            "403",
-            "401",
-            "forbidden",
-            "unauthorized",
-            "登录",
-            "cookie",
-            "权限",
-        ],
-    ) {
-        return TaskDiagnostic {
-            summary: "权限或登录状态异常".to_owned(),
-            detail: "当前账号可能未登录、Cookie 已失效，或该清晰度需要登录/VIP 权限。".to_owned(),
-            recommended_action: RecommendedAction::LoginThenRetry,
-            failed_intent,
-        };
-    }
-
-    if contains_any(
-        &error_text,
-        &["ffmpeg not found", "ffmpeg-not-found", "未找到 ffmpeg"],
-    ) {
-        return TaskDiagnostic {
-            summary: "未找到 FFmpeg".to_owned(),
-            detail: "未检测到可用的 FFmpeg，需要配置后才能合并音视频。".to_owned(),
-            recommended_action: RecommendedAction::ConfigureFfmpeg,
-            failed_intent,
-        };
-    }
-
-    if contains_any(&error_text, &["ffmpeg", "mux", "合并"]) {
-        return TaskDiagnostic {
-            summary: "合并失败".to_owned(),
-            detail: "音视频后处理失败，需要查看原始日志确认 FFmpeg 输出。".to_owned(),
-            recommended_action: RecommendedAction::InspectRawLog,
-            failed_intent,
-        };
-    }
-
-    if contains_any(&error_text, &["timeout", "timed out", "超时"]) {
-        return TaskDiagnostic {
-            summary: "网络超时".to_owned(),
-            detail: "请求在限定时间内没有完成，通常可以直接重试。".to_owned(),
-            recommended_action: RecommendedAction::Retry,
+            summary: rule.summary.clone(),
+            detail: rule.detail.clone(),
+            recommended_action: rule.recommended_action,
             failed_intent,
         };
     }
@@ -147,8 +129,4 @@ pub fn diagnose_task(task: &DownloadTask, logs: &[QueueLogEntry]) -> TaskDiagnos
         recommended_action: RecommendedAction::InspectRawLog,
         failed_intent,
     }
-}
-
-fn contains_any(haystack: &str, needles: &[&str]) -> bool {
-    needles.iter().any(|needle| haystack.contains(needle))
 }

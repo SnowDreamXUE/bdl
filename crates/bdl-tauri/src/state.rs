@@ -1025,7 +1025,8 @@ impl AppState {
         Ok(task)
     }
 
-    pub fn append_task_log(&self, entry: QueueLogEntry) -> BdlResult<QueueLogEntry> {
+    pub fn append_task_log(&self, mut entry: QueueLogEntry) -> BdlResult<QueueLogEntry> {
+        entry.message = bdl_core::account::redact_diagnostic(&entry.message);
         self.storage
             .lock()
             .map_err(|_| state_poisoned("storage"))?
@@ -3105,6 +3106,45 @@ mod tests {
             }],
             acquired_at: Utc::now(),
         }
+    }
+
+    #[test]
+    fn aggregated_failure_survives_command_storage_and_export_with_redaction() {
+        let data_dir = temp_state_dir();
+        let task_id = "task:diagnostic";
+        let state = test_state_with_tasks(&data_dir, vec![task_with_id(task_id)]);
+        let sources = (1..=3)
+            .map(|source| {
+                format!(
+                    "source={source} {} cause=source-{source}-end",
+                    "x".repeat(3500)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let failure = crate::commands::CommandError::from(bdl_core::BdlError::Fetch {
+            message: format!(
+                "[stage=fetch_resource code=response_body_failed] {sources}\nCookie: SESSDATA=private-cookie\nhttps://cdn.test/video?token=private-token"
+            ),
+        });
+        state
+            .append_task_log(bdl_core::queue::QueueLogEntry {
+                task_id: task_id.to_owned(),
+                level: bdl_core::queue::QueueLogLevel::Error,
+                message: failure.diagnostic_message(),
+                created_at: Utc::now().to_rfc3339(),
+            })
+            .expect("diagnostic should persist");
+        let log =
+            crate::diagnostic_export::redact_log(state.task_logs(task_id, 10).unwrap().remove(0));
+        for source in 1..=3 {
+            assert!(log.message.contains(&format!("cause=source-{source}-end")));
+        }
+        assert!(!log.message.contains("private-cookie"));
+        assert!(!log.message.contains("private-token"));
+        assert!(!log.message.contains("<truncated>"));
+        drop(state);
+        std::fs::remove_dir_all(data_dir).expect("test data should be removed");
     }
 
     fn test_state_with_tasks(data_dir: &std::path::Path, tasks: Vec<DownloadTask>) -> AppState {

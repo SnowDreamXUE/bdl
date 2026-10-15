@@ -18,6 +18,7 @@ where
     T: Serialize + Clone,
 {
     app.emit(event, payload).map_err(|error| CommandError {
+        detail: None,
         code: "event_emit_failed".to_owned(),
         message: error.to_string(),
     })

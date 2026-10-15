@@ -227,6 +227,18 @@ export interface QueueLogEntry {
   created_at: string
 }
 
+export interface DiagnosticEnvironment {
+  app_version: string
+  os: string
+  arch: string
+  device: { os_version: string | null; android_sdk: number | null; webview_version: string | null }
+  device_info_available: boolean
+  segment_count: number
+  concurrent_tasks: number
+  retry_count: number
+  proxy_enabled: boolean
+}
+
 export interface QueueProgressEntry {
   task_id: string
   resource_id: string

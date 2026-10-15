@@ -29,16 +29,16 @@ fn http_404_resource_length_failure_refreshes_urls() {
 }
 
 #[test]
-fn http_403_requires_login_then_retry() {
+fn http_403_does_not_assume_login_failure() {
     let diagnostic = diagnose_task(
         &failed_task(ResourceStatus::Failed),
         &[log(QueueLogLevel::Error, "fetch error: HTTP 403 Forbidden")],
     );
 
-    assert_eq!(diagnostic.summary, "权限或登录状态异常");
+    assert_eq!(diagnostic.summary, "源站拒绝访问");
     assert_eq!(
         diagnostic.recommended_action,
-        RecommendedAction::LoginThenRetry
+        RecommendedAction::InspectRawLog
     );
 }
 
@@ -49,7 +49,7 @@ fn permission_denied_reports_unwritable_save_directory() {
         &[log(QueueLogLevel::Error, "io error: Access is denied")],
     );
 
-    assert_eq!(diagnostic.summary, "保存目录不可写");
+    assert_eq!(diagnostic.summary, "本地文件访问被拒绝");
     assert_eq!(
         diagnostic.recommended_action,
         RecommendedAction::InspectRawLog
@@ -66,7 +66,7 @@ fn private_resource_requires_account_or_access_check() {
     assert_eq!(diagnostic.summary, "资源不可访问");
     assert_eq!(
         diagnostic.recommended_action,
-        RecommendedAction::LoginThenRetry
+        RecommendedAction::InspectRawLog
     );
 }
 
@@ -110,6 +110,42 @@ fn network_timeout_is_plain_retry() {
 
     assert_eq!(diagnostic.summary, "网络超时");
     assert_eq!(diagnostic.recommended_action, RecommendedAction::Retry);
+}
+
+#[test]
+fn shared_failure_cases_report_specific_causes() {
+    let cases: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/failure-diagnostics.json")).unwrap();
+    for case in cases.as_array().unwrap() {
+        let message = case["message"].as_str().unwrap();
+        let diagnostic = diagnose_task(
+            &failed_task(ResourceStatus::Failed),
+            &[log(QueueLogLevel::Error, message)],
+        );
+        assert_eq!(
+            diagnostic.summary,
+            case["summary"].as_str().unwrap(),
+            "{message}"
+        );
+        assert_eq!(
+            serde_json::to_value(diagnostic.recommended_action).unwrap(),
+            case["action"],
+            "{message}"
+        );
+    }
+}
+
+#[test]
+fn latest_attempt_does_not_inherit_previous_login_failure() {
+    let mut newest = log(QueueLogLevel::Error, "下载请求失败: HTTP 403 Forbidden");
+    newest.created_at = "2026-07-09T12:02:00Z".into();
+    let mut retry = log(QueueLogLevel::Info, "重试任务");
+    retry.created_at = "2026-07-09T12:01:00Z".into();
+    let logs = vec![newest, retry, log(QueueLogLevel::Error, "Cookie 已失效")];
+    assert_eq!(
+        diagnose_task(&failed_task(ResourceStatus::Failed), &logs).summary,
+        "源站拒绝访问"
+    );
 }
 
 fn failed_task(audio_status: ResourceStatus) -> DownloadTask {

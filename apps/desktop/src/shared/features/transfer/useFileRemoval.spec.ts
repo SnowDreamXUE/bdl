@@ -44,4 +44,38 @@ describe('file deletion consent', () => {
     expect(dialog.busy.value).toBe(false);
     await dialog.confirm(); expect(execute).not.toHaveBeenCalled();
   });
+
+  it('copies deletion context and the original system error without credentials', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    try {
+      const execute = vi.fn().mockRejectedValue(new Error('[stage=delete_file code=file_in_use] path=C:/downloads/movie.mp4 os_error=32\nCookie: SESSDATA=private-cookie\nhttps://cdn.test/file?token=private-token'));
+      const dialog = useFileRemoval('tasks', vi.fn().mockResolvedValue(preview), execute);
+      dialog.show(['selected']); await flush(); await dialog.confirm(); await dialog.copyError();
+      const copied = writeText.mock.calls[0][0];
+      expect(copied).toContain('任务：selected');
+      expect(copied).toContain('os_error=32');
+      expect(copied).toContain('C:/downloads/movie.mp4');
+      expect(copied).not.toContain('private-cookie');
+      expect(copied).not.toContain('private-token');
+      expect(dialog.open.value).toBe(true);
+      expect(dialog.copied.value).toBe(true);
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it('reports clipboard failure without replacing the deletion error and allows retry', async () => {
+    const writeText = vi.fn().mockRejectedValueOnce(new Error('clipboard denied')).mockResolvedValueOnce(undefined);
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    try {
+      const dialog = useFileRemoval('tasks', vi.fn().mockResolvedValue(preview), vi.fn().mockRejectedValue(new Error('文件被占用')));
+      dialog.show(['selected']); await flush(); await dialog.confirm(); await dialog.copyError();
+      expect(dialog.copyNotice.value).toBe('复制失败，请重试');
+      expect(dialog.error.value).toBe('文件被占用');
+      expect(dialog.copied.value).toBe(false);
+      await dialog.copyError();
+      expect(dialog.copyNotice.value).toBe('');
+      expect(dialog.copied.value).toBe(true);
+      expect(dialog.error.value).toBe('文件被占用');
+    } finally { vi.unstubAllGlobals(); }
+  });
 });

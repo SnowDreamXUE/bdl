@@ -1,6 +1,7 @@
 import type { DownloadResourceIntent, DownloadTask, QueueLogEntry, TaskStatus } from '../api/dto'
 import { formatSpeedLimit } from '../utils/speedLimit'
 import { bilibiliTaskUrl } from '../utils/bilibiliLinks'
+import { classifyFailure, latestFailure } from '../utils/failureDiagnostic'
 
 export type QueueFilter = 'active' | 'failed' | 'completed' | 'all'
 
@@ -289,7 +290,7 @@ export const createTaskDiagnosticView = (
 
   if (task.status === 'failed') {
     return {
-      summary: `${issue.trackLabel}失败：${issue.label}`,
+      summary: issue.label === `${issue.trackLabel}失败` ? issue.label : `${issue.trackLabel}失败：${issue.label}`,
       detail: issue.detail,
       impact: trackImpact,
       recommendedAction: issue.recommendedAction,
@@ -327,7 +328,8 @@ export const createTaskTimeline = (task: DownloadTask, logs: QueueLogEntry[] = [
 
   return logs.map((log, index) => {
     const issue = log.level === 'error' ? classifyTaskIssue(task, [log]) : null
-    const title = issue ? `下载失败：${issue.label}` : humanLogTitle(log.message)
+    const cleanup = isFileCleanupLog(log.message) ? classifyFailure(log.message) : null
+    const title = cleanup ? `文件清理失败：${cleanup.summary}` : issue ? `下载失败：${issue.label}` : humanLogTitle(log.message)
 
     return {
       id: `${log.created_at}:${index}:${log.message}`,
@@ -340,15 +342,16 @@ export const createTaskTimeline = (task: DownloadTask, logs: QueueLogEntry[] = [
 }
 
 export const redactLogMessage = (message: string): string =>
-  truncateLogMessage(
-    message
+  truncateLogMessage(redactDiagnosticMessage(message))
+
+export const redactDiagnosticMessage = (message: string): string =>
+  message
       .replace(/\b(Cookie|Authorization|Proxy-Authorization):\s*[^\n\r]+/gi, '$1: <redacted>')
       .replace(
         /\b(SESSDATA|bili_jct|DedeUserID|DedeUserID__ckMd5|buvid3|sid|access_key|token|deadline|expires|bili_ticket|bili_ticket_expires|sign)=([^;&\s]+)/gi,
         '$1=<redacted>',
       )
-      .replace(/https?:\/\/[^\s`"')\]}<>]+/gi, (rawUrl) => redactUrl(rawUrl)),
-  )
+      .replace(/https?:\/\/[^\s`"')\]}<>]+/gi, (rawUrl) => redactUrl(rawUrl))
 
 export const filterTaskByWorkflow = (status: TaskStatus, filter: QueueFilter): boolean => {
   switch (filter) {
@@ -481,97 +484,17 @@ const classifyTaskIssue = (task: DownloadTask, logs: QueueLogEntry[]): Classifie
     }
   }
 
-  const lastErrors = logs
-    .filter((log) => log.level === 'error')
-    .map((log) => log.message)
-    .join('\n')
-    .toLowerCase()
-
-  if (
-    lastErrors.includes('404') ||
-    lastErrors.includes('资源长度失败') ||
-    (lastErrors.includes('not found') && !lastErrors.includes('ffmpeg'))
-  ) {
+  const rule = classifyFailure(latestFailure(logs) ?? '')
+  if (rule) {
+    const recommendedAction = rule.recommended_action === 'retry' || rule.recommended_action === 'login_then_retry'
+      ? 'retry' : rule.recommended_action === 'refresh_urls_and_retry' ? 'refresh_retry' : null
     return {
-      label: '链接可能已过期',
-      detail: 'B 站的媒体直链有时效性，资源长度请求返回 404 时，通常需要重新获取下载地址后再下载。',
+      label: rule.summary,
+      detail: rule.detail,
       trackLabel,
-      recommendedAction: 'refresh_retry',
-      recommendedActionLabel: actionLabel('refresh_retry'),
-    }
-  }
-  if (
-    lastErrors.includes('permission denied') ||
-    lastErrors.includes('access is denied') ||
-    lastErrors.includes('拒绝访问') ||
-    lastErrors.includes('保存目录不可写') ||
-    lastErrors.includes('readonly')
-  ) {
-    return {
-      label: '保存目录不可写',
-      detail: '下载器无法写入目标目录。请检查目录权限、磁盘状态，或在设置中更换保存目录。',
-      trackLabel,
-      recommendedAction: null,
-      recommendedActionLabel: '查看原始日志',
-    }
-  }
-  if (
-    lastErrors.includes('private') ||
-    lastErrors.includes('私密') ||
-    lastErrors.includes('不可见') ||
-    lastErrors.includes('无权访问') ||
-    lastErrors.includes('访问受限')
-  ) {
-    return {
-      label: '资源不可访问',
-      detail: '资源可能是私密稿件、已失效，或当前账号没有访问权限。登录后再重试。',
-      trackLabel,
-      recommendedAction: 'retry',
-      recommendedActionLabel: '登录后重试',
-    }
-  }
-  if (
-    lastErrors.includes('403') ||
-    lastErrors.includes('401') ||
-    lastErrors.includes('forbidden') ||
-    lastErrors.includes('unauthorized') ||
-    lastErrors.includes('登录') ||
-    lastErrors.includes('cookie') ||
-    lastErrors.includes('权限')
-  ) {
-    return {
-      label: '权限或登录异常',
-      detail: '当前账号可能未登录、Cookie 已失效，或该清晰度需要登录/VIP 权限。登录后再重试。',
-      trackLabel,
-      recommendedAction: 'retry',
-      recommendedActionLabel: '登录后重试',
-    }
-  }
-  if (lastErrors.includes('ffmpeg not found') || lastErrors.includes('未找到 ffmpeg')) {
-    return {
-      label: '未找到 FFmpeg',
-      detail: '未检测到可用的 FFmpeg。请在设置中配置 FFmpeg 路径后再重试。',
-      trackLabel,
-      recommendedAction: null,
-      recommendedActionLabel: '查看设置',
-    }
-  }
-  if (lastErrors.includes('ffmpeg') || lastErrors.includes('mux') || lastErrors.includes('合并')) {
-    return {
-      label: '合并失败',
-      detail: '下载轨道已经完成，但媒体封装失败。Android 使用 APK 内置 FFmpeg，桌面使用配置或系统 FFmpeg；请查看原始日志中的具体封装错误。',
-      trackLabel,
-      recommendedAction: null,
-      recommendedActionLabel: '查看原始日志',
-    }
-  }
-  if (lastErrors.includes('timeout') || lastErrors.includes('timed out') || lastErrors.includes('超时')) {
-    return {
-      label: '网络超时',
-      detail: '请求在限定时间内没有完成，通常可以直接重试。',
-      trackLabel,
-      recommendedAction: 'retry',
-      recommendedActionLabel: actionLabel('retry'),
+      recommendedAction,
+      recommendedActionLabel: rule.recommended_action === 'login_then_retry' ? '登录后重试'
+        : recommendedAction ? actionLabel(recommendedAction) : '查看原始日志',
     }
   }
 
@@ -589,8 +512,8 @@ const classifyTaskIssue = (task: DownloadTask, logs: QueueLogEntry[]): Classifie
     label: '任务失败',
     detail: '任务执行失败，具体原因请查看事件或原始日志。',
     trackLabel,
-    recommendedAction: 'retry',
-    recommendedActionLabel: actionLabel('retry'),
+    recommendedAction: null,
+    recommendedActionLabel: '查看原始日志',
   }
 }
 
@@ -609,11 +532,13 @@ const unavailableOptionalAssetMessages = new Set([
   '跳过弹幕：未能获取弹幕地址',
 ])
 
+const isFileCleanupLog = (message: string): boolean => /\[stage=(?:remove_task|delete_preview|delete_files|file_cleanup)\b/.test(message)
+
 const completionWarningLogs = (logs: QueueLogEntry[]): QueueLogEntry[] =>
   logs.filter((log) => {
     const message = log.message.trim()
     return (
-      log.level === 'warning' &&
+      log.level === 'warning' && !isFileCleanupLog(log.message) &&
       !transientWarningMessages.has(message) &&
       !unavailableOptionalAssetMessages.has(message)
     )

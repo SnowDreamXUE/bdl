@@ -39,6 +39,18 @@ class ScheduleWakeupsArgs {
   ],
 )
 class TaskExecutionPlugin(private val activity: Activity) : Plugin(activity) {
+  @Command
+  fun deviceEnvironment(invoke: Invoke) {
+    val result = JSObject()
+    result.put("os_version", Build.VERSION.RELEASE)
+    result.put("android_sdk", Build.VERSION.SDK_INT)
+    val webViewVersion = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      runCatching { WebView.getCurrentWebViewPackage()?.versionName }.getOrNull()
+    } else null
+    result.put("webview_version", webViewVersion)
+    invoke.resolve(result)
+  }
+
   override fun load(webView: WebView) {
     super.load(webView)
     webView.addOnLayoutChangeListener { view, _, _, _, _, _, _, _, _ ->

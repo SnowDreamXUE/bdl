@@ -217,9 +217,15 @@ impl RequestPermit for Permit {
                 .blocked_until_ms
                 .max(now_ms().saturating_add(retry_seconds.max(300).saturating_mul(1000)));
             write_state(&self.path, &self.state)?;
-            return Err(BpiError::network(
-                "source restriction: HTTP/API verification or rate limit response; shared cooldown recorded, no retry",
-            ));
+            return Err(BpiError::network(format!(
+                "source restriction: HTTP {status}; API code={}; Retry-After={retry_seconds}s; {}; shared cooldown recorded, no retry",
+                code.map_or_else(|| "none".to_owned(), |value| value.to_string()),
+                if html_challenge {
+                    "HTML verification required"
+                } else {
+                    "request rejected"
+                }
+            )));
         }
         Ok(())
     }

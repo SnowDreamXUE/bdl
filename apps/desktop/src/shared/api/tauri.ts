@@ -6,6 +6,7 @@ import type {
   AccountLibraryPage,
   BulkQueueResult,
   DiagnosticsExportResponse,
+  DiagnosticEnvironment,
   DocumentTreeDirectory,
   DownloadTask,
   DownloadDirectoryHealth,
@@ -30,15 +31,18 @@ import type {
 export interface CommandErrorShape {
   code: string
   message: string
+  detail?: string
 }
 
 export class BdlCommandError extends Error {
   readonly code: string
+  readonly detail?: string
 
   constructor(error: CommandErrorShape) {
     super(error.message)
     this.name = 'BdlCommandError'
     this.code = error.code
+    this.detail = typeof error.detail === 'string' ? error.detail : undefined
   }
 }
 
@@ -267,6 +271,7 @@ export const maintenanceCleanupCache = () => invokeCommand<MaintenanceResult>('m
 export const maintenanceCleanupTemp = (token: string) => invokeCommand<MaintenanceResult>('maintenance_cleanup_temp', { token })
 
 export const diagnosticsExport = () => invokeCommand<DiagnosticsExportResponse>('diagnostics_export')
+export const diagnosticsEnvironment = () => invokeCommand<DiagnosticEnvironment>('diagnostics_environment')
 
 export const openExternalUrl = (url: string) => invokeCommand<void>('open_external_url', { url })
 
@@ -292,7 +297,7 @@ const normalizeCommandError = (error: unknown, command: string): BdlCommandError
         : command.startsWith('queue_')
           ? '下载操作失败'
           : '操作失败'
-    return new BdlCommandError({ code: normalized.code, message: `${action}，请稍后重试；如果持续失败，请反馈问题。` })
+    return new BdlCommandError({ code: normalized.code, message: `${action}，请稍后重试；如果持续失败，请反馈问题。`, detail: normalized.detail ?? normalized.message })
   }
   return new BdlCommandError(normalized)
 }

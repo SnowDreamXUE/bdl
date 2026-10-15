@@ -339,6 +339,80 @@ const installTauriMock = async (
   );
 };
 
+test.describe('specific failure diagnostics', () => {
+  for (const device of ['desktop', 'phone'] as const) {
+    test(`${device} keeps source errors and diagnostic causes distinct`, async ({ page }, testInfo) => {
+      await page.setViewportSize(device === 'desktop' ? { width: 1280, height: 800 } : { width: 390, height: 844 });
+      if (device === 'phone') await page.addInitScript(() => Object.defineProperty(navigator, 'userAgent', { value: 'Mozilla/5.0 (Linux; Android 12) Mobile' }));
+      await installTauriMock(page, 'light', true, true);
+      await page.addInitScript(() => {
+        const target = window as unknown as {
+          __TAURI_INTERNALS__: { invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> };
+          __COPIED_DIAGNOSTIC__: string;
+          __EMPTY_LOGS__?: boolean;
+        };
+        Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text: string) => { target.__COPIED_DIAGNOSTIC__ = text; } } });
+        const task = { id: 'diagnostic-fixture', title: '源站拒绝访问测试', source_id: 'video:fixture', status: 'failed', resources: [], output_path: 'downloads/403.mp4', media_selection: null, scheduled_at: null, speed_limit_bytes_per_second: null };
+        const invoke = target.__TAURI_INTERNALS__.invoke;
+        target.__TAURI_INTERNALS__.invoke = async (command, args) => {
+          if (command === 'diagnostics_environment') return { app_version: '0.8.4', os: 'android', arch: 'aarch64', device: { os_version: '16', android_sdk: 36, webview_version: '130.0' }, device_info_available: true, segment_count: 4, concurrent_tasks: 2, retry_count: 5, proxy_enabled: false };
+          if (command === 'queue_list') return [task];
+          if (command === 'queue_logs') return target.__EMPTY_LOGS__ ? [] : [
+            { task_id: task.id, level: 'error', message: `[stage=download_video code=remote_forbidden] 请求资源长度失败: HTTP 403 Forbidden\n${'source=1 response cause; '.repeat(200)}\nsource=3 cause=last-source\nCookie: SESSDATA=private-cookie\nhttps://cdn.test/video?token=private-token`, created_at: '2026-10-14T12:02:00Z' },
+            { task_id: task.id, level: 'info', message: '重试任务', created_at: '2026-10-14T12:01:00Z' },
+            { task_id: task.id, level: 'error', message: 'Cookie 已失效', created_at: '2026-10-14T12:00:00Z' },
+          ];
+          return invoke(command, args);
+        };
+      });
+      await page.goto('/');
+      await page.getByRole('button', { name: /传输/ }).click();
+      const row = page.getByRole('list', { name: '传输任务', includeHidden: true }).getByRole('listitem', { includeHidden: true }).filter({ hasText: '源站拒绝访问测试' });
+      await expect(row).toContainText('源站拒绝访问');
+      await row.getByRole('button', { name: /更多操作/ }).click();
+      await page.getByRole(device === 'desktop' ? 'menuitem' : 'button', { name: '详情和诊断', exact: true }).click();
+      const dialog = page.getByRole('dialog', { name: '源站拒绝访问测试', exact: true });
+      await expect(dialog.getByRole('heading', { name: '任务失败：源站拒绝访问' })).toBeVisible();
+      await expect(dialog).toContainText('单凭 403 无法判断');
+      await dialog.getByRole('button', { name: '复制诊断信息', exact: true }).click();
+      const copied = await page.evaluate(() => (window as unknown as { __COPIED_DIAGNOSTIC__: string }).__COPIED_DIAGNOSTIC__);
+      expect(copied).toContain('HTTP 403 Forbidden');
+      expect(copied).toContain('stage=download_video');
+      expect(copied).toContain('source=3 cause=last-source');
+      expect(copied).toContain('系统: android 16 · aarch64');
+      expect(copied).toContain('分段 4 · 并发 2 · 重试 5');
+      expect(copied).not.toContain('private-cookie');
+      expect(copied).not.toContain('private-token');
+      expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+      await dialog.getByRole('tab', { name: /原始日志/ }).click();
+      await dialog.getByRole('button', { name: '一键复制', exact: true }).click();
+      await expect(dialog.getByRole('button', { name: '已复制', exact: true })).toBeVisible();
+      const copiedLogs = await page.evaluate(() => (window as unknown as { __COPIED_DIAGNOSTIC__: string }).__COPIED_DIAGNOSTIC__);
+      expect(copiedLogs).toContain('任务 ID: diagnostic-fixture');
+      expect(copiedLogs).toContain('系统: android 16 · aarch64');
+      expect(copiedLogs).toContain('[error] 2026-10-14T12:02:00Z');
+      expect(copiedLogs).toContain('HTTP 403 Forbidden');
+      expect(copiedLogs).toContain('source=3 cause=last-source');
+      expect(copiedLogs).not.toContain('诊断:');
+      expect(copiedLogs).not.toContain('private-cookie');
+      expect(copiedLogs).not.toContain('private-token');
+      expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath(`failure-diagnostic-${device}.png`) });
+      await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async () => { throw new Error('clipboard unavailable'); } } }));
+      await dialog.getByRole('button', { name: /^(已复制|一键复制)$/ }).click();
+      await expect(page.getByText('复制失败，请重试', { exact: true })).toBeVisible();
+      await expect(dialog.getByRole('button', { name: '一键复制', exact: true })).toBeVisible();
+      await page.addInitScript(() => { (window as unknown as { __EMPTY_LOGS__: boolean }).__EMPTY_LOGS__ = true; });
+      await page.reload();
+      await page.getByRole('button', { name: /传输/ }).click();
+      await row.getByRole('button', { name: /更多操作/ }).click();
+      await page.getByRole(device === 'desktop' ? 'menuitem' : 'button', { name: '详情和诊断', exact: true }).click();
+      await dialog.getByRole('tab', { name: /原始日志/ }).click();
+      await expect(dialog.getByRole('button', { name: '一键复制', exact: true })).toBeDisabled();
+    });
+  }
+});
+
 test.describe('safe file removal', () => {
   test.use({ deviceScaleFactor: 2.25 });
   for (const theme of ['light', 'dark'] as const) {
@@ -369,7 +443,7 @@ test.describe('safe file removal', () => {
               return { token: 'fixture-confirmation', task_ids: selectedIds, files: tasks.filter((t) => selectedIds.includes(t.id)).map((t) => t.output_path), file_count: selectedIds.length, total_bytes: 8192, preserved: ['其他任务仍在使用：shared.mp4'], roots: [] };
             }
             if (command === 'queue_delete_files') {
-              if (!failedOnce) { failedOnce = true; throw { code: 'cleanup_failed', message: '文件被占用，请关闭播放器后重新确认' }; }
+              if (!failedOnce) { failedOnce = true; throw { code: 'file_in_use', message: '文件被占用，请关闭播放器后重新确认', detail: '[stage=file_cleanup code=file_in_use] 打开待删除文件失败：C:/downloads/selected.mp4；os_error=32\nCookie: SESSDATA=private-cookie' }; }
               tasks = tasks.filter((t) => !selectedIds.includes(t.id));
               return { updated: [], removed: selectedIds, failed: [] };
             }
@@ -411,6 +485,12 @@ test.describe('safe file removal', () => {
         await page.screenshot({ path: testInfo.outputPath(`file-removal-${device}-${theme}.png`) });
         await dialog.getByRole('button', { name: '确认删除任务及文件', exact: true }).click();
         await expect(dialog.getByText(/文件被占用/)).toBeVisible();
+        await dialog.getByText('错误详情', { exact: true }).click();
+        await expect(dialog.getByText(/os_error=32/)).toBeVisible();
+        await expect(dialog).not.toContainText('private-cookie');
+        await expect(dialog.getByRole('button', { name: '复制错误信息', exact: true })).toBeVisible();
+        expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+        await page.screenshot({ path: testInfo.outputPath(`file-removal-error-${device}-${theme}.png`) });
         await expect(dialog.getByRole('button', { name: '确认删除任务及文件', exact: true })).toBeDisabled();
         await expect(row).toBeVisible();
         await dialog.getByRole('button', { name: '重新查看文件', exact: true }).click();
