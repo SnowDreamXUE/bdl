@@ -206,6 +206,17 @@ fn render_template(template: &str, context: &NamingContext<'_>) -> BdlResult<Str
 
 fn variable_value(name: &str, context: &NamingContext<'_>) -> BdlResult<String> {
     validate_variable_name(name)?;
+    if let Some((field, format)) = name.split_once(':') {
+        let raw = if field == "date" {
+            context.date
+        } else {
+            context.publish_date
+        };
+        return Ok(raw
+            .and_then(|v| chrono::NaiveDate::parse_from_str(v, "%Y-%m-%d").ok())
+            .map(|v| v.format(format).to_string())
+            .unwrap_or_default());
+    }
     let value = match name {
         "title" => context.title.to_owned(),
         "part_title" => context.part_title.to_owned(),
@@ -222,6 +233,7 @@ fn variable_value(name: &str, context: &NamingContext<'_>) -> BdlResult<String> 
         "collection_title" => context.collection_title.unwrap_or_default().to_owned(),
         "index" => optional_usize(context.index),
         "quality" => context.quality.unwrap_or_default().to_owned(),
+        "quality_label" => quality_label(context.quality.unwrap_or_default()).to_owned(),
         "codec" => context.codec.unwrap_or_default().to_owned(),
         "date" => context.date.unwrap_or_default().to_owned(),
         "publish_date" => context.publish_date.unwrap_or_default().to_owned(),
@@ -233,12 +245,17 @@ fn variable_value(name: &str, context: &NamingContext<'_>) -> BdlResult<String> 
 }
 
 fn validate_variable_name(name: &str) -> BdlResult<()> {
+    if let Some((field, format)) = name.split_once(':')
+        && matches!(field, "date" | "publish_date")
+        && matches!(format, "%Y-%m-%d" | "%Y.%m.%d" | "%Y%m%d")
+    {
+        return Ok(());
+    }
     match name {
         "title" | "part_title" | "part_index" | "bvid" | "aid" | "cid" | "owner_name"
         | "owner_mid" | "series_title" | "season_index" | "episode_index" | "episode_title"
-        | "collection_title" | "index" | "quality" | "codec" | "date" | "publish_date" | "ext" => {
-            Ok(())
-        }
+        | "collection_title" | "index" | "quality" | "quality_label" | "codec" | "date"
+        | "publish_date" | "ext" => Ok(()),
         "" => Err(BdlError::Planning {
             message: "命名模板存在空变量。".to_owned(),
         }),
@@ -271,4 +288,23 @@ fn with_counter_suffix(path: &Path, suffix: usize) -> PathBuf {
     parent
         .map(|parent| parent.join(&file_name))
         .unwrap_or_else(|| PathBuf::from(file_name))
+}
+
+/// Bilibili quality tiers, not inferred pixel dimensions.
+pub fn quality_label(value: &str) -> &str {
+    match value {
+        "6" => "240P",
+        "16" => "360P",
+        "32" => "480P",
+        "64" => "720P",
+        "74" => "720P60",
+        "80" => "1080P",
+        "112" => "1080P+",
+        "116" => "1080P60",
+        "120" => "4K",
+        "125" => "HDR",
+        "126" => "Dolby Vision",
+        "127" => "8K",
+        other => other,
+    }
 }

@@ -50,6 +50,7 @@ export function useSettingsPage() {
   const restoreAllDefaults = () => {
     restoreDefaultSettings();
     updater.setAutoCheck(false);
+    updater.setSource('github', '');
   };
   const activeSettingsSection = ref<SettingsSectionId>('settings-download');
   const availableSettingsSections = computed(() =>

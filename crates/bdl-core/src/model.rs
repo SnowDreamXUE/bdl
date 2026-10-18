@@ -53,6 +53,8 @@ pub struct PageState {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NormalizedItem {
+    #[serde(default)]
+    pub nfo_metadata: crate::nfo::NfoMetadata,
     pub id: ItemId,
     pub title: String,
     pub owner_name: Option<String>,

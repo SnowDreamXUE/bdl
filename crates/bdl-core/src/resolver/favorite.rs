@@ -254,6 +254,7 @@ fn map_video_item(media_id: u64, video: ResolvedFavoriteVideo) -> NormalizedItem
     let video_key = format!("favorite:{media_id}:{}", video.bvid);
 
     NormalizedItem {
+        nfo_metadata: Default::default(),
         id: ItemId(format!("item:{video_key}")),
         title: video.title.clone(),
         owner_name: video.owner_name.clone(),

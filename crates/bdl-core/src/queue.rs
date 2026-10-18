@@ -301,6 +301,8 @@ pub struct TaskProcessingOptions {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DownloadTaskMediaSelection {
+    #[serde(default)]
+    pub nfo_metadata: crate::nfo::NfoMetadata,
     /// SAF receipts distinguish files created here from "skip existing" files.
     #[serde(default)]
     pub owned_document_uris: Vec<String>,
@@ -323,6 +325,7 @@ pub struct DownloadTaskMediaSelection {
 impl Default for DownloadTaskMediaSelection {
     fn default() -> Self {
         Self {
+            nfo_metadata: Default::default(),
             owned_document_uris: Vec::new(),
             preserved_document_uris: Vec::new(),
             processing: None,

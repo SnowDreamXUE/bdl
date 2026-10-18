@@ -518,6 +518,7 @@ fn map_archive_item(source_key: &str, video: ResolvedArchiveVideo) -> Normalized
     let video_key = format!("{source_key}:{}", video.bvid);
 
     NormalizedItem {
+        nfo_metadata: Default::default(),
         id: ItemId(format!("item:{video_key}")),
         title: video.title.clone(),
         owner_name: video.owner_name.clone(),

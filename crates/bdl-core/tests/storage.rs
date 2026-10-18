@@ -397,6 +397,7 @@ fn sample_task() -> DownloadTask {
             duration_seconds: Some(42),
         }),
         media_selection: DownloadTaskMediaSelection {
+            nfo_metadata: Default::default(),
             processing: Some(bdl_core::queue::TaskProcessingOptions {
                 retain_raw_streams: true,
                 embed_cover: true,

@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import SettingsCard from './SettingsCard.vue';
+import NfoOptionsEditor from './NfoOptionsEditor.vue';
+import { createNfoOptions } from '../../utils/nfo';
 import { computed, ref } from 'vue';
 import type { DownloadWorkflow, WorkflowAssetOutput } from '../../api/dto';
 import UiCheckbox from '../../ui/Checkbox.vue';
@@ -11,6 +13,10 @@ import { isAndroidPlatform } from '../../platform/environment';
 
 const flow = defineModel<DownloadWorkflow>({ required: true });
 const { disabled = false } = defineProps<{ disabled?: boolean }>();
+const nfoOptions = computed({
+  get: () => flow.value.nfo_options ?? createNfoOptions(),
+  set: (value) => { flow.value.nfo_options = value; },
+});
 const android = isAndroidPlatform();
 const output = computed(() => workflowOutputs(flow.value));
 const tab = ref('content');
@@ -179,7 +185,8 @@ const subtitleFormat = computed({
             :disabled="disabled"
           />
         </SettingsCard>
-        <p v-if="!video && !audio && !subtitles && !cover && !danmaku" class="settings-note">
+        <NfoOptionsEditor v-if="flow.nfo" v-model="nfoOptions" :disabled="disabled" />
+        <p v-if="!video && !audio && !subtitles && !cover && !danmaku && !flow.nfo" class="settings-note">
           当前没有需要转换的内容。
         </p>
       </template>

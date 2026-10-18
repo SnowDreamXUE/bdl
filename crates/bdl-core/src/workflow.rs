@@ -59,6 +59,7 @@ pub struct DownloadWorkflow {
     pub subtitles: AssetOutput,
     pub danmaku: AssetOutput,
     pub nfo: bool,
+    pub nfo_options: crate::nfo::NfoOptions,
     pub merge_media: bool,
     pub container: String,
     pub quality: String,
@@ -89,6 +90,7 @@ impl Default for DownloadWorkflow {
                 ..Default::default()
             },
             nfo: false,
+            nfo_options: Default::default(),
             merge_media: true,
             container: "mp4".into(),
             quality: "best".into(),
@@ -120,6 +122,9 @@ pub struct DownloadArtifact {
 
 impl DownloadWorkflow {
     pub fn validate(&self) -> BdlResult<()> {
+        if self.nfo {
+            self.nfo_options.validate()?;
+        }
         let invalid = |message: &str| BdlError::Planning {
             message: message.into(),
         };
@@ -308,6 +313,7 @@ impl DownloadWorkflow {
                 settings.danmaku_format.extension().into(),
             ),
             nfo: selected.nfo,
+            nfo_options: Default::default(),
             merge_media: video,
             container: settings.output_extension.clone(),
             quality: settings.quality.clone(),

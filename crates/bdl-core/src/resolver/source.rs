@@ -504,6 +504,7 @@ fn merge_item_parts(
     item.owner_mid = item.owner_mid.or(loaded.owner_mid);
     item.publish_date = item.publish_date.take().or(loaded.publish_date);
     item.cover_url = item.cover_url.take().or(loaded.cover_url);
+    item.nfo_metadata = loaded.nfo_metadata;
     item.parts = loaded.parts;
     Ok(())
 }

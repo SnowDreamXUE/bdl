@@ -5,14 +5,18 @@ import { namingVariables } from '../stores/settings'
 import UiIconButton from './IconButton.vue'
 
 const model = defineModel<string>({ required: true })
-const { error } = defineProps<{ error?: string }>()
+const { error, label = '命名模板', variables = namingVariables, multiline = false, disabled = false, helper } = defineProps<{
+  error?: string; label?: string; variables?: readonly { name: string; desc: string }[];
+  multiline?: boolean; disabled?: boolean; helper?: string;
+}>()
 
-const inputRef = ref<HTMLInputElement | null>(null)
+const inputRef = ref<HTMLInputElement | HTMLTextAreaElement | null>(null)
 const variableMenuOpen = ref(false)
 const fieldId = useId()
 const messageId = `${fieldId}-message`
 
 const insertVariable = async (name: string) => {
+  if (disabled) return
   const token = `{${name}}`
   const input = inputRef.value
   const start = input?.selectionStart ?? model.value.length
@@ -28,22 +32,28 @@ const insertVariable = async (name: string) => {
 
 <template>
   <div class="naming-template-field">
-    <label :for="fieldId">命名模板</label>
+    <label :for="fieldId">{{ label }}</label>
     <div class="naming-template-control">
+      <textarea
+        v-if="multiline" :id="fieldId" ref="inputRef" v-model="model" rows="4"
+        class="ui-native-control textarea-control" :disabled="disabled"
+        :aria-invalid="Boolean(error) || undefined" :aria-describedby="error || helper ? messageId : undefined" />
       <input
+        v-else
         :id="fieldId"
         ref="inputRef"
         v-model="model"
         class="ui-native-control input-control"
         type="text"
+        :disabled="disabled"
         :aria-invalid="Boolean(error) || undefined"
-        :aria-describedby="error ? messageId : undefined"
+        :aria-describedby="error || helper ? messageId : undefined"
       />
       <UPopover
         v-model:open="variableMenuOpen"
         :content="{ align: 'end', side: 'bottom', sideOffset: 6, collisionPadding: 12 }"
       >
-        <UiIconButton icon="plus" label="插入魔法变量" />
+        <UiIconButton icon="plus" :label="label === '命名模板' ? '插入魔法变量' : label + '：插入变量'" :disabled="disabled" />
         <template #content>
           <section class="naming-variable-menu" aria-label="魔法变量">
             <header>
@@ -52,7 +62,7 @@ const insertVariable = async (name: string) => {
             </header>
             <div class="naming-variable-grid">
               <button
-                v-for="variable in namingVariables"
+                v-for="variable in variables"
                 :key="variable.name"
                 type="button"
                 class="naming-variable-option"
@@ -67,7 +77,7 @@ const insertVariable = async (name: string) => {
         </template>
       </UPopover>
     </div>
-    <small v-if="error" :id="messageId" class="error" aria-live="polite">{{ error }}</small>
+    <small v-if="error || helper" :id="messageId" :class="{ error: Boolean(error) }" aria-live="polite">{{ error || helper }}</small>
   </div>
 </template>
 
@@ -170,16 +180,16 @@ const insertVariable = async (name: string) => {
   color: var(--color-accent-strong);
   font-size: var(--font-12);
   font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .naming-variable-description {
   overflow: hidden;
   color: var(--color-muted);
   font-size: var(--font-11);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 @media (width <= 520px) {

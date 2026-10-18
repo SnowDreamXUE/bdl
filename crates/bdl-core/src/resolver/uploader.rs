@@ -191,6 +191,7 @@ fn map_video_item(source_mid: u64, video: ResolvedUploaderVideo) -> NormalizedIt
     let video_key = format!("uploader:{source_mid}:{}", video.bvid);
 
     NormalizedItem {
+        nfo_metadata: Default::default(),
         id: ItemId(format!("item:{video_key}")),
         title: video.title.clone(),
         owner_name: video.owner_name.clone(),

@@ -1,3 +1,5 @@
+import { distributionUpdate, checkMirror } from '../api/updateSources'
+vi.mock('../api/updateSources', async (original) => ({ ...await original<object>(), distributionUpdate: vi.fn(), checkMirror: vi.fn() }))
 import { useSettingsStore } from './settings'
 import { settingsUpdate, openExternalUrl } from '../api/tauri'
 vi.mock('../api/tauri', () => ({ settingsUpdate: vi.fn(), openExternalUrl: vi.fn() }))
@@ -16,6 +18,9 @@ import { useUpdateStore } from './update'
 
 describe('update preferences', () => {
   beforeEach(() => {
+    localStorage.clear()
+    vi.mocked(distributionUpdate).mockReset().mockRejectedValue(new Error("site offline"))
+    vi.mocked(checkMirror).mockReset()
     setActivePinia(createPinia())
     const settings = useSettingsStore()
     settings.loaded = true
@@ -108,4 +113,53 @@ describe('update preferences', () => {
     expect(update.error).toBeNull()
     expect(relaunch).toHaveBeenCalledOnce()
   })
+  const site = {
+    release: { version: '1.2.4', fileName: 'BDL.exe' }, releaseNotes: '修复',
+    sources: [
+      { id: 'github', kind: 'github', label: 'GitHub', delivery: { mode: 'file', authenticationRequired: false, url: 'https://github.com/Yuelioi/bdl/releases/download/v1.2.4/BDL.exe' } },
+      { id: 'mirror', kind: 'external_link', label: '加速', delivery: { mode: 'file', authenticationRequired: false, url: 'https://mirror.test/https://github.com/Yuelioi/bdl/releases/download/v1.2.4/BDL.exe' } },
+      { id: 'quark', kind: 'cloud_drive', label: '夸克', delivery: { mode: 'browser', authenticationRequired: false, url: 'https://pan.quark.cn/s/test' } },
+    ],
+  }
+  it('uses site mirror for signed checks and forwards saved network proxy', async () => {
+    vi.mocked(distributionUpdate).mockResolvedValue(site)
+    vi.mocked(checkMirror).mockResolvedValue(null)
+    useSettingsStore().saved.proxy_url = 'http://127.0.0.1:7890'
+    const update = useUpdateStore()
+    update.setSource('mirror')
+    await update.checkForUpdate()
+    expect(checkMirror).toHaveBeenCalledWith('https://mirror.test/{url}', 'http://127.0.0.1:7890')
+    expect(check).not.toHaveBeenCalled()
+  })
+  it('opens Quark manually and invalidates previous installation on source change', async () => {
+    vi.mocked(distributionUpdate).mockResolvedValue(site)
+    const update = useUpdateStore()
+    update.setSource('quark')
+    await update.checkForUpdate()
+    await update.install()
+    expect(openExternalUrl).toHaveBeenCalledWith('https://pan.quark.cn/s/test')
+    expect(check).not.toHaveBeenCalled()
+    expect(relaunch).not.toHaveBeenCalled()
+    update.setSource('github')
+    expect(update.hasUpdate).toBe(false)
+    expect(update.checked).toBe(false)
+  })
+  it('offers explicit manual download if the signed service fails', async () => {
+    vi.mocked(distributionUpdate).mockResolvedValue(site)
+    check.mockRejectedValue(new Error('offline'))
+    const update = useUpdateStore()
+    await update.checkForUpdate()
+    expect(update.warning).toContain('手动安装')
+    expect(update.manualDownloadUrl).toContain('github.com')
+    expect(update.update).toBeNull()
+  })
+  it('does not report latest after a silent failure or retain stale update', async () => {
+    const update = useUpdateStore()
+    update.androidDownloadUrl = 'https://old.test/apk'
+    check.mockRejectedValue(new Error('offline'))
+    await update.checkForUpdate(true)
+    expect(update.checked).toBe(false)
+    expect(update.hasUpdate).toBe(false)
+  })
+
 })

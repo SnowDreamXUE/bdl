@@ -304,7 +304,7 @@ pub(crate) async fn write_nfo(task: &DownloadTask, resource: &DownloadResource) 
     if let Some(parent) = resource.target_path.parent() {
         fs::create_dir_all(parent).await.map_err(BdlError::from)?;
     }
-    fs::write(&resource.target_path, nfo_content(task))
+    fs::write(&resource.target_path, nfo_content(task)?)
         .await
         .map_err(BdlError::from)?;
     Ok(())
@@ -319,27 +319,26 @@ pub(crate) fn task_has_resource_intent(
         .any(|resource| resource.intent == intent)
 }
 
-fn nfo_content(task: &DownloadTask) -> String {
-    format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-<movie>\n\
-  <title>{}</title>\n\
-  <source>{}</source>\n\
-  <filename>{}</filename>\n\
-</movie>\n",
-        escape_xml(&task.title),
-        escape_xml(&task.source_id),
-        escape_xml(&task.output_path.to_string_lossy())
+fn nfo_content(task: &DownloadTask) -> BdlResult<String> {
+    let options = task
+        .media_selection
+        .workflow
+        .as_ref()
+        .map(|w| w.nfo_options.clone())
+        .unwrap_or_default();
+    let cover = task
+        .media_selection
+        .artifacts
+        .iter()
+        .find(|a| a.intent == Some(DownloadResourceIntent::Cover))
+        .and_then(|a| a.path.file_name())
+        .map(|v| v.to_string_lossy().into_owned());
+    bdl_core::nfo::render(
+        &options,
+        &task.media_selection.nfo_metadata,
+        &task.title,
+        cover.as_deref(),
     )
-}
-
-fn escape_xml(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
 }
 
 #[cfg(test)]
@@ -355,10 +354,10 @@ mod tests {
     fn nfo_content_escapes_xml_sensitive_fields() {
         let task = task(Vec::new());
 
-        let nfo = nfo_content(&task);
+        let nfo = nfo_content(&task).unwrap();
 
         assert!(nfo.contains("A&amp;B &lt;C&gt;"));
-        assert!(nfo.contains("video:&quot;source&quot;"));
+        assert!(!nfo.contains("<source>"));
     }
 
     #[tokio::test]

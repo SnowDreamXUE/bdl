@@ -3,12 +3,28 @@ import SettingsCard from './SettingsCard.vue';
 import { useUpdateStore } from '../../stores/update';
 import UiButton from '../../ui/Button.vue';
 import UiInlineNotice from '../../ui/InlineNotice.vue';
+import UiTextField from '../../ui/TextField.vue';
 
 const update = useUpdateStore();
+const sources = [
+  { label: 'GitHub 下载', value: 'github' },
+  { label: 'GitHub 加速下载', value: 'mirror' },
+  { label: '夸克手动下载', value: 'quark' },
+];
 </script>
 
 <template>
   <div class="grid gap-5">
+    <SettingsCard aria-label="更新来源">
+      <UFormField label="更新来源">
+        <USelect :model-value="update.source" :items="sources" class="w-full" :disabled="update.checking || update.installing" @update:model-value="(value: string) => update.setSource(value as typeof update.source)" />
+      </UFormField>
+      <UiTextField
+        v-if="update.source === 'mirror'" label="自定义加速地址" :model-value="update.customMirror"
+        placeholder="https://你的加速站/" helper="留空使用软件站提供的加速源。也支持 {url}（完整链接）或 {path}（不含 https:// 的链接）模板。"
+        :disabled="update.checking || update.installing" @update:model-value="value => update.setSource('mirror', value)" />
+      <p v-if="update.source === 'quark'" class="m-0 text-xs leading-5 text-(--color-muted)">打开夸克目录后，按版本与系统选择安装包，下载后手动安装。</p>
+    </SettingsCard>
     <SettingsCard aria-label="自动检测">
       <div class="settings-update-heading">
         <div>
@@ -35,6 +51,7 @@ const update = useUpdateStore();
       </div>
 
       <UiInlineNotice v-if="update.error" tone="danger">{{ update.error }}</UiInlineNotice>
+      <UiInlineNotice v-if="update.warning" tone="info">{{ update.warning }}</UiInlineNotice>
       <div v-if="update.hasUpdate" class="rounded-lg border border-(--color-accent) bg-(--color-accent-soft) p-4">
         <div class="flex flex-wrap items-start justify-between gap-4">
           <div class="grid min-w-0 flex-1 gap-1">
@@ -42,7 +59,7 @@ const update = useUpdateStore();
             <p v-if="update.notes" class="m-0 whitespace-pre-line break-words text-sm text-(--color-muted)">{{ update.notes }}</p>
           </div>
           <UiButton :disabled="update.installing" @click="update.install">
-            {{ update.android ? '下载 APK' : update.installing ? `更新中 ${update.progress}%` : '下载并安装' }}
+            {{ update.installing ? `更新中 ${update.progress}%` : update.source === 'quark' ? '打开夸克网盘' : update.manualDownloadUrl ? '浏览器下载' : update.android ? '下载 APK' : '下载并安装' }}
           </UiButton>
         </div>
       </div>
@@ -50,12 +67,12 @@ const update = useUpdateStore();
         在浏览器下载 APK 后，打开安装包完成更新。
       </p>
       <UiInlineNotice v-if="!update.hasUpdate && update.checked && !update.checking && !update.error" tone="info">
-        当前已是最新版本。
+        当前来源暂无更新。
       </UiInlineNotice>
     </SettingsCard>
 
     <p v-if="!update.android" class="m-0 text-xs leading-5 text-(--color-muted)">
-      更新包必须通过 BDL 签名验证。更新服务支持静态清单和动态服务，后续可接入国内镜像而无需改动界面。
+      应用内安装会校验 BDL 更新签名。网络代理沿用“网络与维护”中已保存的代理设置。
     </p>
   </div>
 </template>

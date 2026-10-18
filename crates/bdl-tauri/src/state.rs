@@ -3219,6 +3219,7 @@ mod tests {
                 kind: "uploader_videos".to_owned(),
                 title: "fixture owner 的投稿".to_owned(),
                 items: vec![NormalizedItem {
+                    nfo_metadata: Default::default(),
                     id: ItemId("item:uploader:1001:BV1xx411c7mD".to_owned()),
                     title: "fixture upload".to_owned(),
                     owner_name: Some("fixture owner".to_owned()),
@@ -3264,6 +3265,7 @@ mod tests {
                 kind: label.to_owned(),
                 title: "fixture source".to_owned(),
                 items: vec![NormalizedItem {
+                    nfo_metadata: Default::default(),
                     id: ItemId(format!("item:{label}:123:456")),
                     title: "fixture episode".to_owned(),
                     owner_name: None,
@@ -3303,6 +3305,7 @@ mod tests {
                 kind: "uploader_videos".to_owned(),
                 title: "fixture owner 的投稿".to_owned(),
                 items: vec![NormalizedItem {
+                    nfo_metadata: Default::default(),
                     id: ItemId("item:uploader:1001:BV1yy411c7mD".to_owned()),
                     title: "fixture upload page 2".to_owned(),
                     owner_name: Some("fixture owner".to_owned()),
@@ -3348,6 +3351,7 @@ mod tests {
                 kind: "video".to_owned(),
                 title: "fixture upload".to_owned(),
                 items: vec![NormalizedItem {
+                    nfo_metadata: Default::default(),
                     id: ItemId("item:BV1xx411c7mD".to_owned()),
                     title: "fixture upload".to_owned(),
                     owner_name: None,

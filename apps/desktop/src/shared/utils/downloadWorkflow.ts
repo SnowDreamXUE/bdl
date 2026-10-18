@@ -1,6 +1,11 @@
+import { createNfoOptions, normalizeNfoOptions, nfoOptionsError } from './nfo'
 import type { DownloadPreset, DownloadWorkflow, SettingsSnapshot, WorkflowAssetOutput } from '../api/dto'
 
-export const cloneWorkflow = (value: DownloadWorkflow): DownloadWorkflow => JSON.parse(JSON.stringify(value)) as DownloadWorkflow
+export const cloneWorkflow = (value: DownloadWorkflow): DownloadWorkflow => {
+  const result = JSON.parse(JSON.stringify(value)) as DownloadWorkflow
+  result.nfo_options = normalizeNfoOptions(result.nfo_options)
+  return result
+}
 export const cloneDownloadPresets = (presets: DownloadPreset[]): DownloadPreset[] => presets.map((preset) => ({ ...preset, workflow: cloneWorkflow(preset.workflow) }))
 export const createWorkflow = (): DownloadWorkflow => ({
   video: { enabled: true, save: false, format: 'm4s', retain_original: false },
@@ -8,7 +13,7 @@ export const createWorkflow = (): DownloadWorkflow => ({
   cover: { enabled: false, save: true, embed: false, format: 'original', retain_original: false },
   subtitles: { enabled: false, save: true, embed: false, format: 'srt', retain_original: false },
   danmaku: { enabled: false, save: true, embed: false, format: 'xml', retain_original: false },
-  nfo: false, merge_media: true, container: 'mp4', quality: 'best', audio_quality: 'best', codec: 'auto',
+  nfo: false, nfo_options: createNfoOptions(), merge_media: true, container: 'mp4', quality: 'best', audio_quality: 'best', codec: 'auto',
   media_preferences: { video: [], audio: [], fallback: 'best' }, missing_quality_policy: 'lower',
 })
 
@@ -88,6 +93,7 @@ export const migrateDownloadPresets = (settings: SettingsSnapshot): Pick<Setting
 }
 
 export const workflowError = (flow: DownloadWorkflow): string | null => {
+  if (flow.nfo) { const error = nfoOptionsError(normalizeNfoOptions(flow.nfo_options)); if (error) return error }
   const merge = flow.merge_media && flow.video.enabled
   if (![flow.video.enabled, flow.audio.enabled, flow.cover.enabled, flow.subtitles.enabled, flow.danmaku.enabled, flow.nfo].some(Boolean)) return '至少选择一种内容'
   for (const media of [flow.video, flow.audio]) if (media.enabled && !media.save && !media.retain_original && !merge) return '未生成媒体成品时，请保存独立音视频文件'

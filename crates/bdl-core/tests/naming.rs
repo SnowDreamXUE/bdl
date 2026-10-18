@@ -180,3 +180,22 @@ fn unique_path_adds_counter_for_reserved_paths() {
     assert_eq!(first, PathBuf::from("downloads/video.mp4"));
     assert_eq!(second, PathBuf::from("downloads/video (1).mp4"));
 }
+
+#[test]
+fn readable_quality_and_explicit_date_formats_keep_legacy_values() {
+    let context = NamingContext {
+        quality: Some("80"),
+        publish_date: Some("2026-10-18"),
+        ext: "mp4",
+        ..Default::default()
+    };
+    let template = "{quality}_{quality_label}_{publish_date:%Y.%m.%d}";
+    validate_template(template).unwrap();
+    assert_eq!(
+        render_output_path(template, &context).unwrap(),
+        PathBuf::from("80_1080P_2026.10.18.mp4")
+    );
+    assert!(validate_template("{date:%Q}").is_err());
+    assert!(validate_template("{title:%Y%m%d}").is_err());
+    assert_eq!(bdl_core::naming::quality_label("999"), "999");
+}

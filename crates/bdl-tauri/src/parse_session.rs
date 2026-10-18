@@ -478,6 +478,18 @@ fn hydrated_item_for_target(
 }
 
 fn merge_missing_item_metadata(target: &mut NormalizedItem, fallback: &NormalizedItem) {
+    if target.nfo_metadata.description.is_empty() {
+        target
+            .nfo_metadata
+            .description
+            .clone_from(&fallback.nfo_metadata.description);
+    }
+    if target.nfo_metadata.genre.is_empty() {
+        target
+            .nfo_metadata
+            .genre
+            .clone_from(&fallback.nfo_metadata.genre);
+    }
     if target.owner_name.is_none() {
         target.owner_name.clone_from(&fallback.owner_name);
     }
@@ -528,6 +540,7 @@ mod tests {
     #[test]
     fn hydration_keeps_list_publish_date_when_video_detail_lacks_it() {
         let mut target = NormalizedItem {
+            nfo_metadata: Default::default(),
             id: ItemId("item:target".to_owned()),
             title: "target".to_owned(),
             owner_name: None,
@@ -538,6 +551,7 @@ mod tests {
             parts: Vec::new(),
         };
         let fallback = NormalizedItem {
+            nfo_metadata: Default::default(),
             id: ItemId("item:fallback".to_owned()),
             title: "fallback".to_owned(),
             owner_name: None,

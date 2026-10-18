@@ -454,6 +454,29 @@ fn plan_part(
         ));
     }
 
+    // Movie artwork naming recognized without relying on XML image scraping.
+    if options
+        .workflow
+        .as_ref()
+        .is_some_and(|w| w.nfo && w.nfo_options.include_cover && w.cover.save)
+    {
+        for resource in &mut resources {
+            if resource.intent == DownloadResourceIntent::Cover {
+                let stem = output_path
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                let ext = resource
+                    .target_path
+                    .extension()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                resource.target_path = output_path.with_file_name(format!("{stem}-poster.{ext}"));
+                resource.temp_path = temp_path_for(&resource.target_path);
+            }
+        }
+    }
+
     let artifacts = options
         .workflow
         .as_ref()
@@ -475,6 +498,46 @@ fn plan_part(
             },
         ),
         media_selection: DownloadTaskMediaSelection {
+            nfo_metadata: crate::nfo::NfoMetadata {
+                aid: part.aid,
+                owner_mid: item.owner_mid,
+                part_index: selected.part_index + 1,
+                index: selected.item_index + 1,
+                source_title: tree.source.title.clone(),
+                date: Local::now().date_naive().to_string(),
+                quality: video.map(stream_quality_label).unwrap_or_default(),
+                codec: video.map(stream_codec_label).unwrap_or_default().to_owned(),
+                source_url: media_refresh_intent(tree.source.kind, part, selected.part_index + 1)
+                    .map(|intent| match intent.input {
+                        DownloadTaskRefreshInput::VideoBvid { bvid } => format!(
+                            "https://www.bilibili.com/video/{bvid}?p={}",
+                            selected.part_index + 1
+                        ),
+                        DownloadTaskRefreshInput::VideoAid { aid } => format!(
+                            "https://www.bilibili.com/video/av{aid}?p={}",
+                            selected.part_index + 1
+                        ),
+                        DownloadTaskRefreshInput::BangumiEpisode { ep_id } => {
+                            format!("https://www.bilibili.com/bangumi/play/ep{ep_id}")
+                        }
+                        DownloadTaskRefreshInput::CheeseEpisode { ep_id } => {
+                            format!("https://www.bilibili.com/cheese/play/ep{ep_id}")
+                        }
+                    })
+                    .unwrap_or_default(),
+                title: item.title.clone(),
+                part_title: part.title.clone(),
+                uploader: item.owner_name.clone().unwrap_or_default(),
+                publish_date: item.publish_date.clone().unwrap_or_default(),
+                duration_seconds: part.duration_seconds.or(if item.parts.len() == 1 {
+                    item.duration_seconds
+                } else {
+                    None
+                }),
+                bvid: part.bvid.clone().unwrap_or_default(),
+                cid: part.cid,
+                ..item.nfo_metadata.clone()
+            },
             owned_document_uris: Vec::new(),
             preserved_document_uris: Vec::new(),
             outputs_verified: false,

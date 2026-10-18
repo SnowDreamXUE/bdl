@@ -345,6 +345,7 @@ mod tests {
             scheduled_at: None,
             speed_limit_bytes_per_second: None,
             media_selection: bdl_core::queue::DownloadTaskMediaSelection {
+                nfo_metadata: Default::default(),
                 workflow: Some(workflow),
                 artifacts,
                 ..Default::default()

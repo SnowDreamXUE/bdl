@@ -2664,6 +2664,7 @@ mod tests {
         })).unwrap();
         let options = super::download_options_from_request(&request, &settings, None).unwrap();
         let selection = bdl_core::queue::DownloadTaskMediaSelection {
+            nfo_metadata: Default::default(),
             processing: options.processing,
             ..Default::default()
         };

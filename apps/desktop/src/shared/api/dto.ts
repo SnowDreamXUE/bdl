@@ -346,6 +346,33 @@ export interface WorkflowAssetOutput {
   format: 'original' | 'srt' | 'ass' | 'xml' | 'html'
   retain_original: boolean
 }
+export interface NfoExtraFields {
+  sort_title: string
+  original_title: string
+  tagline: string
+  outline: string
+  genres: string
+  tags: string
+  collection: string
+  collection_overview: string
+  directors: string
+  writers: string
+  studios: string
+  countries: string
+}
+export interface NfoOptions {
+  title_template: string
+  plot_template: string
+  include_plot: boolean
+  include_date: boolean
+  include_runtime: boolean
+  include_genre: boolean
+  include_source: boolean
+  include_cover: boolean
+  uploader_as_actor: boolean
+  custom_tags: string
+  extra: NfoExtraFields
+}
 export interface DownloadWorkflow {
   video: WorkflowMediaInput
   audio: WorkflowMediaInput
@@ -353,6 +380,7 @@ export interface DownloadWorkflow {
   subtitles: WorkflowAssetOutput
   danmaku: WorkflowAssetOutput
   nfo: boolean
+  nfo_options?: NfoOptions
   merge_media: boolean
   container: 'mp4' | 'mkv'
   quality: string

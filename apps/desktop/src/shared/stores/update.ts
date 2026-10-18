@@ -7,10 +7,16 @@ import { markRaw } from 'vue'
 import { useSettingsStore } from './settings'
 import { checkAndroidUpdate } from '../api/androidUpdate'
 import { openExternalUrl } from '../api/tauri'
+import { distributionUpdate, checkMirror, mirrorTemplate, mirrorUrl, newer, type DistributionUpdate } from '../api/updateSources'
 
 export const useUpdateStore = defineStore('update', {
   state: () => ({
     supported: true,
+    source: 'github' as 'github' | 'mirror' | 'quark',
+    customMirror: '',
+    distribution: null as DistributionUpdate | null,
+    manualDownloadUrl: null as string | null,
+    warning: null as string | null,
     android: false,
     androidDownloadUrl: null as string | null,
     currentVersion: '0.1.0',
@@ -25,10 +31,29 @@ export const useUpdateStore = defineStore('update', {
     update: null as Update | null,
   }),
   getters: {
-    hasUpdate: (state) => Boolean(state.update || state.androidDownloadUrl),
+    hasUpdate: (state) => Boolean(state.update || state.androidDownloadUrl || state.manualDownloadUrl),
   },
   actions: {
+    setSource(source: 'github' | 'mirror' | 'quark', customMirror?: string) {
+      if (this.checking || this.installing) return
+      this.source = source
+      this.customMirror = (customMirror ?? this.customMirror).trim()
+      this.update?.close?.().catch(() => {})
+      this.update = null
+      this.androidDownloadUrl = null
+      this.manualDownloadUrl = null
+      this.availableVersion = null
+      this.checked = false
+      this.error = null
+      this.warning = null
+      try { localStorage.setItem('bdl.update-source', JSON.stringify({ source, customMirror: this.customMirror })) } catch { /* Storage may be unavailable. */ }
+    },
     async initialize(supported = true, android = false) {
+      try {
+        const saved = JSON.parse(localStorage.getItem('bdl.update-source') ?? '{}')
+        if (['github', 'mirror', 'quark'].includes(saved.source)) this.source = saved.source
+        if (typeof saved.customMirror === 'string') this.customMirror = saved.customMirror
+      } catch { /* Ignore invalid preferences. */ }
       this.android = android
       this.supported = supported || android
       const settings = useSettingsStore()
@@ -52,33 +77,90 @@ export const useUpdateStore = defineStore('update', {
       if (this.checking || this.installing) return
       this.checking = true
       this.error = null
+      this.warning = null
+      this.checked = false
+      this.update?.close?.().catch(() => {})
+      this.update = null
+      this.androidDownloadUrl = null
+      this.manualDownloadUrl = null
+      this.availableVersion = null
+      this.distribution = null
       try {
-        if (this.android) {
-          const availableUpdate = await checkAndroidUpdate(this.currentVersion)
-          this.androidDownloadUrl = availableUpdate?.downloadUrl ?? null
-          this.availableVersion = availableUpdate?.version ?? null
-          this.notes = availableUpdate?.notes ?? null
+        let siteError: unknown
+        try { this.distribution = await distributionUpdate() } catch (error) { siteError = error }
+        const site = this.distribution
+        const github = site?.sources.find(s => s.kind === 'github')?.delivery.url
+        const quark = site?.sources.find(s => s.kind === 'cloud_drive' && s.delivery.url?.startsWith('https://pan.quark.cn/'))
+        let template = this.customMirror
+        if (!template && github) {
+          template = site?.sources.map(s => mirrorTemplate(s, github)).find(Boolean) ?? ''
+        }
+        if (this.source === 'quark') {
+          if (!site) throw siteError ?? new Error('软件站暂时无法连接。')
+          if (!quark) throw new Error('当前平台尚未提供夸克下载，请选择其他来源。')
+          if (newer(site.release.version, this.currentVersion)) {
+            this.manualDownloadUrl = quark.delivery.url!
+            this.availableVersion = site.release.version
+            this.notes = site.releaseNotes
+          }
+          this.checked = true
           return
         }
-        const availableUpdate = await check()
-        this.update = availableUpdate ? markRaw(availableUpdate) : null
-        this.availableVersion = this.update?.version ?? null
-        this.notes = this.update?.body ?? null
+        if (this.source === 'mirror' && !template) throw new Error('软件站暂无可用加速源，请填写自定义加速地址。')
+        if (this.source === 'mirror') mirrorUrl(template, 'https://github.com/Yuelioi/bdl/releases/latest/download/latest.json')
+        if (this.android) {
+          if (this.source === 'mirror' && site && !github) throw new Error('当前平台尚未提供可加速的安装包，请选择其他来源。')
+          if (site && github && newer(site.release.version, this.currentVersion)) {
+            this.androidDownloadUrl = this.source === 'mirror' ? mirrorUrl(template, github) : github
+            this.availableVersion = site.release.version
+            this.notes = site.releaseNotes
+          } else if (this.source === 'github') {
+            const availableUpdate = await checkAndroidUpdate(this.currentVersion)
+            this.androidDownloadUrl = availableUpdate?.downloadUrl ?? null
+            this.availableVersion = availableUpdate?.version ?? null
+            this.notes = availableUpdate?.notes ?? null
+          } else if (!site) {
+            throw siteError ?? new Error('软件站暂时无法连接。')
+          }
+          this.checked = true
+          return
+        }
+        const proxy = useSettingsStore().saved.proxy_url ?? undefined
+        try {
+          const availableUpdate = this.source === 'mirror'
+            ? await checkMirror(template, proxy)
+            : await check({ timeout: 20_000, ...(proxy ? { proxy } : {}) })
+          this.update = availableUpdate ? markRaw(availableUpdate) : null
+          this.availableVersion = this.update?.version ?? null
+          this.notes = this.update?.body ?? null
+          if (!this.update && site && github && newer(site.release.version, this.currentVersion)) {
+            this.manualDownloadUrl = this.source === 'mirror' ? mirrorUrl(template, github) : github
+            this.availableVersion = site.release.version
+            this.notes = site.releaseNotes
+            this.warning = '软件站已有新版本，自动安装尚未就绪，可先下载后手动安装。'
+          }
+          this.checked = true
+        } catch (error) {
+          if (!site || !github || !newer(site.release.version, this.currentVersion)) throw error
+          this.manualDownloadUrl = this.source === 'mirror' ? mirrorUrl(template, github) : github
+          this.availableVersion = site.release.version
+          this.notes = site.releaseNotes
+          this.warning = '自动安装服务暂不可用，可在浏览器下载此版本后手动安装。'
+        }
       } catch (error) {
         if (!silent) this.error = error instanceof Error ? error.message : String(error)
       } finally {
-        this.checked = true
         this.checking = false
       }
     },
     async install() {
       if (!this.supported) return
-      if (this.android) {
-        if (!this.androidDownloadUrl || this.installing) return
+      if (this.android || this.manualDownloadUrl) {
+        if (!(this.manualDownloadUrl || this.androidDownloadUrl) || this.installing) return
         this.installing = true
         this.error = null
         try {
-          await openExternalUrl(this.androidDownloadUrl)
+          await openExternalUrl((this.manualDownloadUrl || this.androidDownloadUrl)!)
         } catch (error) {
           this.error = error instanceof Error ? error.message : String(error)
         } finally {

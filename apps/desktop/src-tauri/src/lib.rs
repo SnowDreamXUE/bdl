@@ -1,4 +1,5 @@
 use tauri::Manager;
+mod updates;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -54,6 +55,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            updates::update_distribution,
+            updates::update_check_mirror,
             bdl_tauri::commands::parse_create_source,
             bdl_tauri::commands::parse_load_more,
             bdl_tauri::commands::parse_load_page,

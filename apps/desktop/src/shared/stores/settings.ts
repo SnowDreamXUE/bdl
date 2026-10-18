@@ -56,7 +56,12 @@ export const namingVariables = [
   { name: 'episode_title', desc: '集标题' },
   { name: 'collection_title', desc: '合集名' },
   { name: 'index', desc: '列表序号' },
-  { name: 'quality', desc: '清晰度' },
+  { name: 'quality', desc: '清晰度编号（如 80）' },
+  { name: 'quality_label', desc: '清晰度名称（如 1080P）' },
+  { name: 'date:%Y.%m.%d', desc: '下载日期（点分）' },
+  { name: 'publish_date:%Y.%m.%d', desc: '发布日期（点分）' },
+  { name: 'date:%Y%m%d', desc: '下载日期（紧凑）' },
+  { name: 'publish_date:%Y%m%d', desc: '发布日期（紧凑）' },
   { name: 'codec', desc: '编码' },
   { name: 'date', desc: '下载日期（任务创建日）' },
   { name: 'publish_date', desc: '发布时间（B站发布日期）' },
@@ -724,7 +729,7 @@ export const validateNamingTemplate = (template: string): string | null => {
     if (!name) {
       return '命名模板存在空变量。'
     }
-    if (!namingVariableNames.has(name)) {
+    if (!namingVariableNames.has(name) && !/^(date|publish_date):%Y-%m-%d$/.test(name)) {
       return `命名模板存在未知变量 {${name}}。`
     }
 
@@ -757,6 +762,7 @@ export const previewTemplate = (template: string, ext: string): string => {
     collection_title: '示例合集',
     index: '1',
     quality: '80',
+    quality_label: '1080P',
     codec: 'avc',
     date: localDate,
     publish_date: '2024-01-02',
@@ -765,7 +771,15 @@ export const previewTemplate = (template: string, ext: string): string => {
 
   const rendered = (template || defaultSettings().naming_template).replace(
     /\{([^{}]+)\}/g,
-    (_, key: string) => values[key.trim()] ?? '',
+    (_, key: string) => {
+      const [name, format] = key.trim().split(':')
+      const value = values[name] ?? ''
+      if (!format) return value
+      if (!['date', 'publish_date'].includes(name)) return ''
+      if (format === '%Y.%m.%d') return value.replaceAll('-', '.')
+      if (format === '%Y%m%d') return value.replaceAll('-', '')
+      return format === '%Y-%m-%d' ? value : ''
+    },
   )
   const extension = ext.trim().replace(/^\.+|\.+$/g, '')
   const path = rendered.split(/[/\\]/).map((component) => component

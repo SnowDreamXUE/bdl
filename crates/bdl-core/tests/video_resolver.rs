@@ -25,6 +25,7 @@ struct CountingVideoApi {
 impl VideoApi for CountingVideoApi {
     async fn view(&self, _id: &VideoInputId) -> Result<ResolvedVideo, BdlError> {
         Ok(ResolvedVideo {
+            nfo_metadata: Default::default(),
             aid: 170001,
             bvid: "BV1xx411c7mD".to_owned(),
             default_cid: 62131,
@@ -291,6 +292,7 @@ async fn live_video_resolver_resolves_bv_when_enabled() -> Result<(), BdlError> 
 fn fake_api() -> FakeVideoApi {
     FakeVideoApi {
         video: ResolvedVideo {
+            nfo_metadata: Default::default(),
             aid: 170001,
             bvid: "BV1xx411c7mD".to_owned(),
             default_cid: 62131,

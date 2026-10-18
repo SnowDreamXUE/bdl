@@ -3723,3 +3723,98 @@ test('desktop update notice remains separate from Android APK guidance', async (
   await expect(page.getByRole('button', { name: '下载 APK' })).toHaveCount(0);
   await expect(page.getByText('当前已是最新版本。')).toHaveCount(0);
 });
+
+for (const [width, theme] of [[390, 'light'], [1280, 'dark']] as const) {
+  test(`update source selection ${width} ${theme}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 850 });
+    await installTauriMock(page, theme);
+    await page.addInitScript(() => {
+      const target = window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args?: unknown) => Promise<unknown> }; __UPDATE_TEMPLATE__?: string; __UPDATE_URL__?: string };
+      const original = target.__TAURI_INTERNALS__.invoke;
+      target.__TAURI_INTERNALS__.invoke = async (command, args) => {
+        if (command === 'plugin:app|version') return '0.8.5';
+        if (command === 'update_distribution') return {
+          release: { version: '99.0.0', fileName: 'BDL.exe' }, releaseNotes: '多来源更新测试',
+          sources: [
+            { id: 'github', kind: 'github', label: 'GitHub', delivery: { mode: 'file', authenticationRequired: false, url: 'https://github.com/Yuelioi/bdl/releases/download/v99.0.0/BDL.exe' } },
+            { id: 'quark', kind: 'cloud_drive', label: '夸克', delivery: { mode: 'browser', authenticationRequired: false, url: 'https://pan.quark.cn/s/test' } },
+          ],
+        };
+        if (command === 'update_check_mirror') {
+          target.__UPDATE_TEMPLATE__ = (args as { template: string }).template;
+          return { rid: 99, currentVersion: '0.8.5', version: '99.0.0', body: '镜像更新', rawJson: {} };
+        }
+        if (command === 'open_external_url') { target.__UPDATE_URL__ = (args as { url: string }).url; return; }
+        return original(command, args);
+      };
+    });
+    await page.goto('/');
+    await page.getByRole('button', { name: /^设置/ }).click();
+    await page.getByRole('button', { name: /应用更新/ }).click();
+    await page.getByRole('combobox', { name: '更新来源' }).click();
+    await page.getByRole('option', { name: 'GitHub 加速下载' }).click();
+    await page.getByLabel('自定义加速地址').fill('https://mirror.example/{url}');
+    await page.getByRole('button', { name: '检测更新', exact: true }).click();
+    await expect(page.getByText('发现新版本 v99.0.0')).toBeVisible();
+    await expect(page.getByRole('button', { name: '下载并安装' })).toBeVisible();
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __UPDATE_TEMPLATE__: string }).__UPDATE_TEMPLATE__)).toBe('https://mirror.example/{url}');
+    await page.screenshot({ path: testInfo.outputPath('update-mirror.png'), fullPage: true });
+    await page.getByRole('combobox', { name: '更新来源' }).focus();
+    await page.keyboard.press('Enter');
+    await page.getByRole('option', { name: '夸克手动下载' }).click();
+    await expect(page.getByText('发现新版本 v99.0.0')).toHaveCount(0);
+    await page.getByRole('button', { name: '检测更新', exact: true }).click();
+    await page.getByRole('button', { name: '打开夸克网盘' }).click();
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __UPDATE_URL__: string }).__UPDATE_URL__)).toBe('https://pan.quark.cn/s/test');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('update-sources.png'), fullPage: true });
+  });
+}
+
+for (const [width, theme] of [[390, 'light'], [1280, 'dark']] as const) {
+  test(`NFO preset configuration ${width} ${theme}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 850 });
+    await installTauriMock(page, theme);
+    await installPresetPersistence(page);
+    await page.goto('/');
+    await openPresetSettings(page);
+    await page.getByRole('button', { name: '编辑', exact: true }).click();
+    const editor = page.getByRole('dialog', { name: '编辑预设', exact: true });
+    await editor.getByRole('checkbox', { name: '生成 NFO', exact: true }).check();
+    await editor.getByRole('tab', { name: '转换', exact: true }).click();
+    await editor.getByLabel('NFO 标题模板', { exact: true }).fill('{video_title} - {part_title}');
+    await editor.getByRole('textbox', { name: /^自定义标签/ }).fill('教程, 收藏');
+    await editor.getByRole('checkbox', { name: '将 UP 主加入人物列表' }).check();
+    await editor.getByText('进阶字段：排序、作品集与制作信息', { exact: true }).click();
+    await editor.getByRole('textbox', { name: '排序标题', exact: true }).fill('排序：');
+    await editor.getByRole('button', { name: '排序标题：插入变量', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    await page.locator('[data-variable="part_index:03"]').click();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.naming-variable-menu')).toHaveCount(0);
+    await expect(editor.getByRole('textbox', { name: '排序标题', exact: true })).toHaveValue('排序：{part_index:03}');
+    await editor.getByRole('textbox', { name: '作品集名称', exact: true }).fill('{video_title}');
+    await page.screenshot({ path: testInfo.outputPath('nfo-advanced.png'), fullPage: true, animations: 'disabled' });
+    await editor.getByText('进阶字段：排序、作品集与制作信息', { exact: true }).click();
+    await editor.getByText('模板变量与示例', { exact: true }).click();
+    await expect(editor.getByText('标题示例：示例视频 - 开场', { exact: false }).first()).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('nfo-options.png'), fullPage: true });
+    await editor.getByRole('button', { name: '保存预设', exact: true }).click();
+    await page.getByRole('button', { name: '编辑', exact: true }).click();
+    await editor.getByRole('tab', { name: '转换', exact: true }).click();
+    await expect(editor.getByRole('textbox', { name: /^自定义标签/ })).toHaveValue('教程, 收藏');
+    await expect(editor.getByRole('checkbox', { name: '将 UP 主加入人物列表' })).toBeChecked();
+    await editor.getByText('进阶字段：排序、作品集与制作信息', { exact: true }).click();
+    await expect(editor.getByRole('textbox', { name: '排序标题', exact: true })).toHaveValue('排序：{part_index:03}');
+    await editor.getByText('进阶字段：排序、作品集与制作信息', { exact: true }).click();
+    await editor.getByText('套用展示方案', { exact: true }).click();
+    await editor.getByRole('combobox', { name: 'NFO 展示方案', exact: true }).click();
+    await page.getByRole('option', { name: '多 P 视频归组', exact: true }).click();
+    await editor.getByRole('button', { name: '套用方案', exact: true }).click();
+    await expect(editor.getByLabel('NFO 标题模板', { exact: true })).toHaveValue('{video_title} - P{part_index} - {part_title}');
+
+    await editor.getByLabel('NFO 标题模板', { exact: true }).fill('{unknown}');
+    await expect(editor.getByRole('button', { name: '保存预设', exact: true })).toBeDisabled();
+  });
+}

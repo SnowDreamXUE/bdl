@@ -9,6 +9,7 @@ pub mod media_preferences;
 pub mod model;
 pub mod muxer;
 pub mod naming;
+pub mod nfo;
 pub mod planner;
 mod process;
 pub mod queue;

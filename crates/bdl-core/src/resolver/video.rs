@@ -52,6 +52,7 @@ impl VideoInputId {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedVideo {
+    pub nfo_metadata: crate::nfo::NfoMetadata,
     pub aid: u64,
     pub bvid: String,
     pub default_cid: u64,
@@ -207,6 +208,7 @@ where
         }
 
         let item = NormalizedItem {
+            nfo_metadata: video.nfo_metadata.clone(),
             id: ItemId(format!("item:{canonical_key}")),
             title: video.title.clone(),
             owner_name: video.owner_name.clone(),
@@ -387,6 +389,11 @@ impl VideoViewResponse {
             .map(|owner| owner.mid)
             .filter(|mid| *mid > 0);
         let video = ResolvedVideo {
+            nfo_metadata: crate::nfo::NfoMetadata {
+                description: data.desc,
+                genre: data.tname,
+                ..Default::default()
+            },
             aid: data.aid,
             bvid: data.bvid,
             default_cid: data.cid,
@@ -420,6 +427,10 @@ impl VideoViewResponse {
 
 #[derive(Debug, Deserialize)]
 struct VideoViewData {
+    #[serde(default)]
+    desc: String,
+    #[serde(default)]
+    tname: String,
     aid: u64,
     #[serde(default)]
     bvid: String,
@@ -802,6 +813,8 @@ mod tests {
                     "bvid": "BV1test",
                     "cid": 2,
                     "title": "云端镜像 01",
+                    "desc": "视频简介",
+                    "tname": "知识",
                     "pic": "https://example.invalid/cover.jpg",
                     "pubdate": 1767196800,
                     "owner": {"mid": 592988861, "name": "测试UP"},
@@ -827,6 +840,8 @@ mod tests {
         assert_eq!(snapshot.video.publish_date.as_deref(), Some("2026-01-01"));
         assert_eq!(snapshot.video.owner_name.as_deref(), Some("测试UP"));
         assert_eq!(snapshot.video.pages[0].duration_seconds, Some(120));
+        assert_eq!(snapshot.video.nfo_metadata.description, "视频简介");
+        assert_eq!(snapshot.video.nfo_metadata.genre, "知识");
     }
 
     #[test]

@@ -892,6 +892,7 @@ fn fixture_tree(include_audio: bool) -> NormalizedSourceTree {
             kind: "video".to_owned(),
             title: "Fixture Video".to_owned(),
             items: vec![NormalizedItem {
+                nfo_metadata: Default::default(),
                 id: ItemId("item:BV1".to_owned()),
                 title: "Fixture Video".to_owned(),
                 owner_name: Some("owner".to_owned()),
@@ -1151,4 +1152,118 @@ fn sdr_selection_filters_dynamic_range_before_codec_and_never_falls_back_to_hdr(
             .to_string()
             .contains("SDR")
     );
+}
+
+#[test]
+fn nfo_metadata_and_options_survive_task_serialization() {
+    let mut tree = fixture_tree(true);
+    tree.groups[0].items[0].nfo_metadata.description = "source description".into();
+    tree.groups[0].items[0].nfo_metadata.genre = "知识".into();
+    let mut options = DownloadOptions::new(PathBuf::from("downloads"));
+    let mut workflow = bdl_core::workflow::DownloadWorkflow {
+        nfo: true,
+        ..Default::default()
+    };
+    workflow.nfo_options.custom_tags = "收藏".into();
+    workflow.nfo_options.extra.sort_title = "{part_index:03}".into();
+    workflow.cover.enabled = true;
+    workflow.apply(&mut options).unwrap();
+    let tasks = plan_selected_parts(&tree, &[PartId("part:BV1:100".into())], &options).unwrap();
+    let restored: bdl_core::queue::DownloadTask =
+        serde_json::from_str(&serde_json::to_string(&tasks[0]).unwrap()).unwrap();
+    assert_eq!(restored.media_selection.nfo_metadata.part_index, 1);
+    assert!(
+        restored
+            .media_selection
+            .nfo_metadata
+            .source_url
+            .ends_with("?p=1")
+    );
+    assert_eq!(
+        restored
+            .media_selection
+            .workflow
+            .as_ref()
+            .unwrap()
+            .nfo_options
+            .extra
+            .sort_title,
+        "{part_index:03}"
+    );
+    let cover = restored
+        .resources
+        .iter()
+        .find(|r| r.intent == DownloadResourceIntent::Cover)
+        .unwrap();
+    assert!(
+        cover
+            .target_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .contains("-poster.")
+    );
+    let renamed = restored
+        .clone()
+        .with_output_path(PathBuf::from("downloads/renamed.mp4"))
+        .unwrap();
+    let cover = renamed
+        .resources
+        .iter()
+        .find(|r| r.intent == DownloadResourceIntent::Cover)
+        .unwrap();
+    assert!(
+        cover
+            .target_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("renamed-poster.")
+    );
+    assert_eq!(
+        restored.media_selection.nfo_metadata.description,
+        "source description"
+    );
+    assert_eq!(restored.media_selection.nfo_metadata.genre, "知识");
+    assert_eq!(restored.media_selection.nfo_metadata.cid, Some(100));
+    assert_eq!(
+        restored
+            .media_selection
+            .workflow
+            .unwrap()
+            .nfo_options
+            .custom_tags,
+        "收藏"
+    );
+    let mut old = serde_json::to_value(&tasks[0]).unwrap();
+    old["media_selection"]
+        .as_object_mut()
+        .unwrap()
+        .remove("nfo_metadata");
+    old["media_selection"]["workflow"]
+        .as_object_mut()
+        .unwrap()
+        .remove("nfo_options");
+    let restored: bdl_core::queue::DownloadTask = serde_json::from_value(old).unwrap();
+    assert_eq!(restored.media_selection.nfo_metadata, Default::default());
+    assert_eq!(
+        restored.media_selection.workflow.unwrap().nfo_options,
+        Default::default()
+    );
+}
+
+#[test]
+fn nfo_does_not_use_whole_video_duration_for_an_unknown_multipart_duration() {
+    let mut tree = fixture_tree(true);
+    let item = &mut tree.groups[0].items[0];
+    item.parts[0].duration_seconds = None;
+    let mut second = item.parts[0].clone();
+    second.id = PartId("part:BV1:101".into());
+    second.cid = Some(101);
+    item.parts.push(second);
+    let options = DownloadOptions::new(PathBuf::from("downloads"));
+    let task = plan_selected_parts(&tree, &[PartId("part:BV1:100".into())], &options)
+        .unwrap()
+        .remove(0);
+    assert_eq!(task.media_selection.nfo_metadata.duration_seconds, None);
 }
