@@ -20,6 +20,7 @@ export const sourceKindLabels: Record<SourceKind, string> = {
   video: '视频',
   bangumi: '番剧',
   cheese: '课程',
+  watch_later: '稍后再看',
   favorite: '收藏夹',
   collection: '合集',
   series: '系列',

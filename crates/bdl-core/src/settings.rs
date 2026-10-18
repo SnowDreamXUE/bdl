@@ -60,6 +60,8 @@ pub struct DocumentTreeDirectory {
 #[serde(default)]
 pub struct AppSettings {
     pub settings_schema_version: u16,
+    #[serde(default)]
+    pub clipboard_monitor_enabled: bool,
     pub usage_notice_acknowledged: bool,
     pub auto_check_updates: bool,
     pub theme_preference: String,
@@ -102,6 +104,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             settings_schema_version: 1,
+            clipboard_monitor_enabled: false,
             usage_notice_acknowledged: false,
             auto_check_updates: false,
             theme_preference: "system".to_owned(),

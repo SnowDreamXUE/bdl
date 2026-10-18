@@ -10,6 +10,7 @@ pub enum SourceKind {
     Bangumi,
     Cheese,
     Favorite,
+    WatchLater,
     Collection,
     Series,
     Uploader,

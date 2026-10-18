@@ -61,6 +61,20 @@ const sourceTree = (id: string, title: string): NormalizedSourceTree => ({
 vi.mock('../api/tauri', () => api)
 
 describe('parse store', () => {
+  it('does not restore a private list after leaving its workspace', async () => {
+    let resolve!: (tree: NormalizedSourceTree) => void;
+    api.parseCreateSource.mockReturnValueOnce(new Promise((done) => { resolve = done }))
+    const parse = useParseStore()
+    const pending = parse.createSource('https://www.bilibili.com/list/watchlater')
+    await parse.clearWorkspace()
+    const tree = sourceTree('watch_later:old', '稍后再看')
+    tree.source.kind = 'watch_later'
+    resolve(tree)
+    await expect(pending).resolves.toBe(false)
+    expect(parse.activeSourceId).toBeNull()
+    expect(api.parseCloseSource).toHaveBeenCalledWith('watch_later:old')
+  })
+
   beforeEach(() => {
     setActivePinia(createPinia())
     Object.values(api).forEach((mock) => mock.mockReset())

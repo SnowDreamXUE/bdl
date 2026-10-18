@@ -46,6 +46,10 @@ const entries = computed(() => {
     selected: row.partIds.length > 0 && row.partIds.every((id) => selected.value.has(id)),
   }));
 });
+function toggleCard(event: MouseEvent, id?: string) {
+  if (props.disabled || (event.target instanceof Element && event.target.closest('button, input, a, label, [role="checkbox"]'))) return;
+  if (id) emit('toggle', id);
+}
 </script>
 
 <template>
@@ -56,6 +60,7 @@ const entries = computed(() => {
       class="mobile-result"
       :class="{ selected: entry.selected }"
       role="listitem"
+      @click="toggleCard($event, entry.id)"
     >
       <UiCheckbox
         v-if="managing"
@@ -69,7 +74,7 @@ const entries = computed(() => {
         class="mobile-result-content"
         type="button"
         :disabled="disabled"
-        :aria-label="`选择 ${entry.title}`"
+        :aria-label="`${entry.selected ? '取消选择' : '选择'} ${entry.title}`"
         :aria-pressed="entry.selected"
         @click="emit('toggle', entry.id)"
       >

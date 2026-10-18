@@ -46,6 +46,7 @@ interface BackgroundParseJob {
 }
 
 interface ParseState {
+  createGeneration: number
   backgroundJob: BackgroundParseJob | null
   input: string
   sources: Record<string, NormalizedSourceTree>
@@ -131,6 +132,7 @@ export type PacedParsingResult = 'completed' | 'stopped' | 'failed'
 
 export const useParseStore = defineStore('parse', {
   state: (): ParseState => ({
+    createGeneration: 0,
     backgroundJob: null,
     input: '',
     sources: {},
@@ -208,6 +210,7 @@ export const useParseStore = defineStore('parse', {
         return false
       }
 
+      const generation = ++this.createGeneration
       const batch = inputs.length > 1
       this.loadingBySource.__create__ = true
       try {
@@ -223,6 +226,10 @@ export const useParseStore = defineStore('parse', {
             return { input: sourceInput, tree: null, error: errorMessage(error) }
           }
         })
+        if (generation !== this.createGeneration) {
+          await Promise.allSettled(outcomes.filter((outcome) => outcome.tree?.source.kind === 'watch_later').map((outcome) => parseCloseSource(outcome.tree!.source.id)))
+          return false
+        }
         const failures = outcomes.filter((outcome) => !outcome.tree)
         const validOutcomes: Array<(typeof outcomes)[number] & { tree: NormalizedSourceTree }> = []
         for (const outcome of outcomes) {
@@ -290,7 +297,7 @@ export const useParseStore = defineStore('parse', {
         }
         return true
       } finally {
-        this.loadingBySource.__create__ = false
+        if (generation === this.createGeneration) this.loadingBySource.__create__ = false
       }
     },
     async loadMore(sourceId: string) {
@@ -481,6 +488,7 @@ export const useParseStore = defineStore('parse', {
         this.setNotice('请先停止后台解析下载', 'warning')
         return
       }
+      this.createGeneration++
       const sourceIds = [...this.sourceOrder]
       sourceIds.forEach((sourceId) => this.stopPacedParsing(sourceId))
 

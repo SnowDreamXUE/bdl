@@ -1,10 +1,10 @@
 import { computed, ref, watch } from 'vue';
-import type { AccountLibraryFolder, NormalizedItem } from '../../api/dto';
+import type { LibraryContentSource, NormalizedItem } from '../../api/dto';
 import { useParseStore } from '../../stores/parse';
 import { bilibiliVideoUrl } from '../../utils/bilibiliLinks';
 
 export function useLibraryFolderDetail(
-  props: { folder: AccountLibraryFolder; loadingInitial?: boolean },
+  props: { folder: LibraryContentSource; loadingInitial?: boolean },
   onDownload: () => void,
 ) {
   const parse = useParseStore();
@@ -105,6 +105,9 @@ export function useLibraryFolderDetail(
     if (!sourceId.value || loading.value) return;
     const requestedSource = sourceId.value;
     const nextPage = Math.min(Math.max(1, targetPage), totalPages.value);
+    if (source.value?.source.kind === 'watch_later') {
+      pageItemIds.value[nextPage] = items.value.slice((nextPage - 1) * pageSize, nextPage * pageSize).map((item) => item.id);
+    }
     if (!pageItemIds.value[nextPage]) {
       const ids = await parse.loadPage(requestedSource, nextPage);
       if (ids === null || sourceId.value !== requestedSource) return;

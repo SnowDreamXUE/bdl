@@ -281,6 +281,7 @@ fn source_kind_name(kind: SourceKind) -> &'static str {
         SourceKind::Bangumi => "bangumi",
         SourceKind::Cheese => "cheese",
         SourceKind::Favorite => "favorite",
+        SourceKind::WatchLater => "watch_later",
         SourceKind::Collection => "collection",
         SourceKind::Series => "series",
         SourceKind::Uploader => "uploader",

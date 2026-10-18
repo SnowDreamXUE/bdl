@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ClipboardPreference from "../../shared/ui/ClipboardPreference.vue";
 import UiButton from '../../shared/ui/Button.vue';
 import UiInlineNotice from '../../shared/ui/InlineNotice.vue';
 import UiStatusBadge from '../../shared/ui/StatusBadge.vue';
@@ -88,6 +89,7 @@ const {
               :disabled="createLoading"
             />
 
+            <ClipboardPreference />
             <div class="parse-entry-actions">
               <UiButton type="button" variant="secondary" :disabled="createLoading" @click="pasteInput">
                 <UIcon name="i-tabler-clipboard" aria-hidden="true" />

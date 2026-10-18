@@ -18,6 +18,7 @@ import UiDialog from './shared/ui/Dialog.vue'
 import UiEnvironmentHealthPanel from './shared/ui/EnvironmentHealthPanel.vue'
 import UiTabs from './shared/ui/Tabs.vue'
 import UiTextarea from './shared/ui/Textarea.vue'
+import ClipboardMonitor from './shared/ui/ClipboardMonitor.vue'
 import UiToastHost from './shared/ui/ToastHost.vue'
 import UsageNotice from './shared/ui/UsageNotice.vue'
 
@@ -376,6 +377,7 @@ watch(
       </UiDialog>
 
       <UiToastHost />
+      <ClipboardMonitor />
   </UApp>
 </template>
 

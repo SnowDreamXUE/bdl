@@ -298,6 +298,30 @@ impl AppState {
                                     .resolve(classified, options)
                                     .await?
                             }
+                            SourceKind::WatchLater => {
+                                let account = self.account()?;
+                                if !account.logged_in {
+                                    return Err(BdlError::Account {
+                                        message: "请先登录后读取稍后再看。".into(),
+                                    });
+                                }
+                                let mut tree =
+                                    bdl_core::resolver::watch_later::resolve_watch_later(
+                                        self.shared_resolver_client()?.as_ref(),
+                                    )
+                                    .await?;
+                                if self.account()?.mid != account.mid || !self.account()?.logged_in
+                                {
+                                    return Err(BdlError::Account {
+                                        message: "账号已切换，请重新加载稍后再看。".into(),
+                                    });
+                                }
+                                tree.source.id = bdl_core::ids::SourceId(format!(
+                                    "watch_later:{}",
+                                    uuid::Uuid::new_v4()
+                                ));
+                                tree
+                            }
                             SourceKind::Cheese => {
                                 self.cheese_resolver()?.resolve(classified, options).await?
                             }
@@ -1774,6 +1798,7 @@ fn source_kind_name(kind: SourceKind) -> &'static str {
         SourceKind::Bangumi => "bangumi",
         SourceKind::Cheese => "cheese",
         SourceKind::Favorite => "favorite",
+        SourceKind::WatchLater => "watch_later",
         SourceKind::Collection => "collection",
         SourceKind::Series => "series",
         SourceKind::Uploader => "uploader",

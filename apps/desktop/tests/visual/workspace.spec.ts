@@ -3818,3 +3818,59 @@ for (const [width, theme] of [[390, 'light'], [1280, 'dark']] as const) {
     await expect(editor.getByRole('button', { name: '保存预设', exact: true })).toBeDisabled();
   });
 }
+
+for (const device of ['desktop', 'android'] as const) {
+  test(`issue10 watch later, card selection and clipboard on ${device}`, async ({ page }, testInfo) => {
+    await page.setViewportSize(device === 'desktop' ? { width: 1280, height: 850 } : { width: 390, height: 844 });
+    if (device === 'android') await page.addInitScript(() => Object.defineProperty(navigator, 'userAgent', { value: 'Mozilla/5.0 (Linux; Android 12) Mobile' }));
+    await installTauriMock(page, 'light', true, true);
+    await page.addInitScript(() => {
+      Object.assign(window, { isTauri: true, __ISSUE10_CLIP__: 'https://www.bilibili.com/video/BV1xx411c7mD' });
+      const target = window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args?: unknown) => Promise<unknown> } };
+      const original = target.__TAURI_INTERNALS__.invoke;
+      target.__TAURI_INTERNALS__.invoke = async (command, args) => {
+        if (command.endsWith('read_clipboard_text')) return (window as unknown as { __ISSUE10_CLIP__: string }).__ISSUE10_CLIP__;
+        if (command === 'parse_create_source' && (args as { request: { input: string } }).request.input.includes('watchlater')) return {
+          source: { id: 'watch_later:test', kind: 'watch_later', input: 'https://www.bilibili.com/list/watchlater', title: '稍后再看', loaded_count: 25, total_count: 25, has_more: false },
+          groups: [{ id: 'group:watch', kind: 'watch_later', title: '稍后再看', page: null, items: Array.from({ length: 25 }, (_, i) => ({
+            id: `item:watch:${i}`, title: `待看视频 ${i + 1}`, owner_name: '测试用户', cover_url: null, duration_seconds: 60,
+            parts: [{ id: `part:watch:${i}`, title: `待看视频 ${i + 1}`, aid: i + 1, bvid: 'BV1xx411c7mD', cid: null, duration_seconds: 60, streams: [], assets: [] }],
+          })) }],
+        };
+        return original(command, args);
+      };
+    });
+    await page.goto('/');
+    const input = page.getByRole('textbox', { name: /^Bilibili 链接或 BV \/ AV/ });
+    await input.fill('BV17x411w7KC');
+    await page.getByRole('checkbox', { name: '返回应用时识别剪贴板链接' }).check();
+    const prompt = page.getByRole('dialog', { name: '发现剪贴板中的 Bilibili 链接' });
+    await expect(prompt).toBeVisible();
+    await prompt.getByRole('button', { name: '添加到解析', exact: true }).click();
+    await expect(input).toHaveValue('BV17x411w7KC\nhttps://www.bilibili.com/video/BV1xx411c7mD');
+    await page.getByRole('button', { name: /^内容库/ }).click();
+    await page.getByRole('tab', { name: '稍后再看', exact: true }).click();
+    const rows = page.locator(device === 'desktop' ? '.media-list-row' : '.mobile-result');
+    await expect(rows).toHaveCount(20);
+    await rows.first().click({ position: { x: 2, y: 2 } });
+    if (device === 'desktop') await expect(rows.first()).toHaveAttribute('data-selected', 'true');
+    else await expect(rows.first()).toHaveClass(/selected/);
+    await rows.first().click({ position: { x: 2, y: 2 } });
+    if (device === 'desktop') await expect(rows.first()).toHaveAttribute('data-selected', 'false');
+    else await expect(rows.first()).not.toHaveClass(/selected/);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('watch-later.png'), fullPage: true });
+    await page.getByRole('button', { name: /下一页|Next Page/ }).click();
+    await expect(rows).toHaveCount(5);
+    await expect(rows.first()).toContainText('待看视频 21');
+    await page.getByRole('tab', { name: /^我的收藏/ }).click();
+    await expect(page.locator('.library-card').first()).toBeVisible();
+    await page.evaluate(() => {
+      Object.assign(window, { __ISSUE10_CLIP__: 'https://www.bilibili.com/video/BV17x411w7KC' });
+      window.dispatchEvent(new Event('focus'));
+    });
+    await prompt.getByRole('button', { name: '添加到解析', exact: true }).click();
+    await expect(input).toHaveValue('https://www.bilibili.com/video/BV17x411w7KC');
+
+  });
+}

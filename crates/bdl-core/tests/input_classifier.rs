@@ -289,3 +289,16 @@ fn rejects_unknown_input_with_actionable_message() {
     let err = classify_input("not a bilibili thing").unwrap_err();
     assert!(err.to_string().contains("无法识别这个输入"));
 }
+
+#[test]
+fn watch_later_list_and_selected_video_are_distinct() {
+    assert_eq!(
+        classify_input("https://www.bilibili.com/list/watchlater").unwrap(),
+        ClassifiedInput::WatchLater
+    );
+    assert_eq!(
+        classify_input("https://www.bilibili.com/list/watchlater?bvid=BV1xx411c7mD").unwrap(),
+        ClassifiedInput::VideoBvid("BV1xx411c7mD".into())
+    );
+    assert!(classify_input("https://example.com/list/watchlater").is_err());
+}

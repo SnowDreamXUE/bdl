@@ -69,6 +69,7 @@ export const namingVariables = [
 
 const defaultSettings = (): SettingsSnapshot => ({
   settings_schema_version: 1,
+  clipboard_monitor_enabled: false,
   usage_notice_acknowledged: false,
   auto_check_updates: false,
   theme_preference: 'system',
@@ -151,7 +152,7 @@ interface EnvironmentCheckOverrides {
   ffmpegPath?: string | null
 }
 
-type AppPreferences = Pick<SettingsSnapshot, 'usage_notice_acknowledged' | 'auto_check_updates' | 'theme_preference' | 'selected_download_preset' | 'download_presets'>
+type AppPreferences = Pick<SettingsSnapshot, 'clipboard_monitor_enabled' | 'usage_notice_acknowledged' | 'auto_check_updates' | 'theme_preference' | 'selected_download_preset' | 'download_presets'>
 type DownloadPreferences = Pick<SettingsSnapshot, 'media_mode' | 'audio_output_format' | 'subtitle_format' | 'danmaku_format' | 'archive_mode' | 'archive_assets' | 'embed_cover' | 'embed_subtitles' | 'output_extension' | 'retain_raw_streams'>
 const settingsWrites = new WeakMap<object, Promise<unknown>>()
 const enqueueSettingsWrite = <T>(store: object, write: () => Promise<T>): Promise<T> => {

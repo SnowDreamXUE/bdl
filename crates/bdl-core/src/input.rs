@@ -5,6 +5,7 @@ use crate::model::SourceKind;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClassifiedInput {
+    WatchLater,
     VideoBvid(String),
     VideoAid(u64),
     ShortUrl(String),
@@ -19,6 +20,7 @@ pub enum ClassifiedInput {
 impl ClassifiedInput {
     pub fn source_kind(&self) -> SourceKind {
         match self {
+            Self::WatchLater => SourceKind::WatchLater,
             Self::VideoBvid(_) | Self::VideoAid(_) => SourceKind::Video,
             Self::ShortUrl(_) => SourceKind::Unknown,
             Self::Uploader { .. } => SourceKind::Uploader,
@@ -143,6 +145,15 @@ fn classify_url(raw_url: &str, url: &Url) -> Option<ClassifiedInput> {
         return classify_url(desktop.as_str(), &desktop);
     }
 
+    if matches!(
+        url.path().trim_end_matches('/'),
+        "/list/watchlater" | "/watchlater"
+    ) {
+        if let Some((_, bvid)) = url.query_pairs().find(|(key, _)| key == "bvid") {
+            return extract_bvid(&bvid).map(ClassifiedInput::VideoBvid);
+        }
+        return Some(ClassifiedInput::WatchLater);
+    }
     let segments = path_segments(url);
 
     if favorite_id_from_path(url).is_some() {

@@ -3,6 +3,7 @@ export type SourceKind =
   | 'bangumi'
   | 'cheese'
   | 'favorite'
+  | 'watch_later'
   | 'collection'
   | 'series'
   | 'uploader'
@@ -281,6 +282,7 @@ export interface SettingsSnapshot {
   download_presets: DownloadPreset[]
   selected_download_preset: string
   settings_schema_version: number
+  clipboard_monitor_enabled: boolean
   usage_notice_acknowledged: boolean
   auto_check_updates: boolean
   theme_preference: 'system' | 'light' | 'dark'
@@ -482,3 +484,6 @@ export interface ParseRules {
   rest_seconds: number
   pages_per_round: number
 }
+
+export type LibraryCategory = AccountLibraryFolderKind | 'watch_later'
+export type LibraryContentSource = Pick<AccountLibraryFolder, 'title' | 'source_url' | 'owner_name' | 'media_count'>

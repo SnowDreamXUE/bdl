@@ -56,7 +56,8 @@ export const isSingleVideoInput = (input: string): boolean => {
     if (!['http:', 'https:'].includes(url.protocol)) return false
     if (['b23.tv', 'www.b23.tv'].includes(url.hostname)) return url.pathname.length > 1
     return ['bilibili.com', 'www.bilibili.com', 'm.bilibili.com'].includes(url.hostname)
-      && /^\/video\/(BV[0-9A-Za-z]{10}|av\d+)\/?$/i.test(url.pathname)
+      && (/^\/video\/(BV[0-9A-Za-z]{10}|av\d+)\/?$/i.test(url.pathname)
+        || (/^\/(list\/)?watchlater\/?$/.test(url.pathname) && /^BV[0-9A-Za-z]{10}$/i.test(url.searchParams.get('bvid') ?? '')))
   } catch {
     return false
   }

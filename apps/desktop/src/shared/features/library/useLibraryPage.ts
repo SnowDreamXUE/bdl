@@ -1,5 +1,5 @@
-import { computed, onDeactivated, onMounted, ref, useTemplateRef, watch } from 'vue';
-import type { AccountLibraryFolder, AccountLibraryFolderKind } from '../../api/dto';
+import { computed, onActivated, onDeactivated, onMounted, ref, useTemplateRef, watch } from 'vue';
+import type { LibraryContentSource, LibraryCategory } from '../../api/dto';
 import { useAccountStore } from '../../stores/account';
 import { useLibraryStore } from '../../stores/library';
 import { useParseStore } from '../../stores/parse';
@@ -13,24 +13,26 @@ export function useLibraryPage() {
   const ui = useUiStore();
   const query = ref('');
   const failedCoverIds = ref<string[]>([]);
-  const detailFolder = ref<AccountLibraryFolder | null>(null);
+  const detailFolder = ref<LibraryContentSource | null>(null);
   const detailLoading = ref(false);
   const downloadPlanner = useTemplateRef<{ openDialog: () => Promise<void> }>('download-planner');
   let detailRequestId = 0;
+  let pageActive = false;
   const categories: Array<{
-    kind: AccountLibraryFolderKind;
+    kind: LibraryCategory;
     label: string;
     description: string;
     icon: string;
   }> = [
-    { kind: 'created_favorite', label: '收藏夹', description: '我创建的', icon: 'i-tabler-bookmarks' },
+    { kind: 'created_favorite', label: '我的收藏', description: '我创建的', icon: 'i-tabler-bookmarks' },
     { kind: 'collected_favorite', label: '订阅合集', description: '我收藏的', icon: 'i-tabler-folders' },
+    { kind: 'watch_later', label: '稍后再看', description: '稍后观看的视频', icon: 'i-tabler-clock' },
   ];
   const activeCategory = computed(() => categories.find((item) => item.kind === library.activeKind) ?? categories[0]);
-  const activeCategoryUrl = computed(() => bilibiliFavoriteCategoryUrl(account.profile.mid, library.activeKind));
+  const activeCategoryUrl = computed(() => library.activeKind === 'watch_later' ? 'https://www.bilibili.com/list/watchlater' : bilibiliFavoriteCategoryUrl(account.profile.mid, library.activeKind));
   const categoryFilter = computed({
     get: () => library.activeKind,
-    set: (value: string) => void selectCategory(value as AccountLibraryFolderKind),
+    set: (value: string) => void selectCategory(value as LibraryCategory),
   });
   const categoryTabs = computed(() =>
     categories.map((category) => ({
@@ -50,25 +52,23 @@ export function useLibraryPage() {
     );
   });
   const load = async (kind = library.activeKind, targetPage = 1) => {
+    if (!pageActive || !account.profile.logged_in) return;
+    if (kind === 'watch_later') { openFolder({ title: '稍后再看', source_url: 'https://www.bilibili.com/list/watchlater', owner_name: null, media_count: 0 }); return; }
     await library.load(kind, targetPage);
   };
-  const selectCategory = async (kind: AccountLibraryFolderKind) => {
+  const selectCategory = async (kind: LibraryCategory) => {
     if (detailFolder.value || detailLoading.value) await closeFolder();
     query.value = '';
     await library.selectKind(kind);
+    if (kind === 'watch_later') await load(kind);
   };
-  const loadFolder = async (item: AccountLibraryFolder, requestId: number) => {
+  const loadFolder = async (item: LibraryContentSource, requestId: number) => {
     const opened = await parse.createSource(item.source_url);
-    if (requestId !== detailRequestId) {
-      if (opened && parse.activeSource?.source.input === item.source_url && parse.activeSourceId) {
-        await parse.clearWorkspace();
-      }
-      return;
-    }
+    if (requestId !== detailRequestId) return;
     detailLoading.value = false;
     if (opened) parse.clearNotice();
   };
-  const openFolder = (item: AccountLibraryFolder) => {
+  const openFolder = (item: LibraryContentSource) => {
     const requestId = ++detailRequestId;
     detailFolder.value = item;
     detailLoading.value = true;
@@ -83,9 +83,15 @@ export function useLibraryPage() {
   };
   const openDownloadSettings = () => void downloadPlanner.value?.openDialog();
   onMounted(() => {
+    pageActive = true;
     if (account.profile.logged_in) void load();
   });
+  onActivated(() => {
+    pageActive = true;
+    if (library.activeKind === 'watch_later' && account.profile.logged_in && !detailFolder.value) void load();
+  });
   onDeactivated(() => {
+    pageActive = false;
     if (detailFolder.value || detailLoading.value) void closeFolder();
   });
   watch(
@@ -96,7 +102,11 @@ export function useLibraryPage() {
         library.clear();
         return;
       }
-      if (!previous?.[0] || previous[1] !== mid) void load();
+      if (!previous?.[0] || previous[1] !== mid) {
+        library.clear();
+        if (detailFolder.value || detailLoading.value) void closeFolder().then(() => load());
+        else void load();
+      }
     },
   );
   return {

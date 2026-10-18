@@ -10,8 +10,8 @@ import ExternalLinkButton from '../../../shared/ui/ExternalLinkButton.vue'
 import SourceParseControls from '../parse/SourceParseControls.vue'
 import SourceLoadStatus from '../parse/SourceLoadStatus.vue'
 import { useLibraryFolderDetail } from "../../../shared/features/library/useLibraryFolderDetail";
-import type { AccountLibraryFolder } from "../../../shared/api/dto";
-const props = defineProps<{folder: AccountLibraryFolder; loadingInitial?: boolean}>();
+import type { LibraryContentSource } from "../../../shared/api/dto";
+const props = defineProps<{folder: LibraryContentSource; embedded?: boolean; loadingInitial?: boolean}>();
 const emit = defineEmits<{back: []; download: []}>();
 const { parse, pageSize, currentPage, loadBatchSize, source, sourceId, items, totalCount, totalPages, pageItems, selectedCount, sourceRequestLoading, pacedParsing, pacedWaiting, pacedStopping, loading, activeError, hasMore, itemOwnerName, toggleItem, toggleCurrentPageSelection, clearSelection, downloadSelected, parseMore, parseAll, stopParsing, downloadAll, goToPage } = useLibraryFolderDetail(props, () => emit("download"));
 const rows = computed(() => pageItems.value.map((item) => ({ id: item.id, title: item.title, meta: itemOwnerName(item), partIds: item.parts.map((part) => part.id) })));
@@ -25,7 +25,7 @@ const rows = computed(() => pageItems.value.map((item) => ({ id: item.id, title:
         <button
           type="button"
           class="grid size-8 shrink-0 place-items-center rounded-md text-(--color-muted) hover:bg-(--color-panel) hover:text-(--color-text)"
-          aria-label="返回内容集合"
+          v-if="!embedded" aria-label="返回内容集合"
           @click="emit('back')"
         >
           <UIcon name="i-tabler-arrow-left" class="size-4" aria-hidden="true" />

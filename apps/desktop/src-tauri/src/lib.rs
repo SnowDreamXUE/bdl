@@ -1,6 +1,22 @@
 use tauri::Manager;
 mod updates;
 
+#[tauri::command]
+fn desktop_read_clipboard_text(app: tauri::AppHandle) -> Result<String, String> {
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_clipboard_manager::ClipboardExt;
+        app.clipboard()
+            .read_text()
+            .map_err(|error| error.to_string())
+    }
+    #[cfg(mobile)]
+    {
+        let _ = app;
+        Err("Use the mobile clipboard bridge".into())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default();
@@ -55,6 +71,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            desktop_read_clipboard_text,
             updates::update_distribution,
             updates::update_check_mirror,
             bdl_tauri::commands::parse_create_source,
@@ -119,6 +136,7 @@ pub fn run() {
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let builder = builder
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build());
 

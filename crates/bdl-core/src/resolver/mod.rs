@@ -8,6 +8,7 @@ pub mod paged;
 pub mod source;
 pub mod uploader;
 pub mod video;
+pub mod watch_later;
 
 use async_trait::async_trait;
 use chrono::{FixedOffset, TimeZone};

@@ -35,16 +35,17 @@ const searchOpen = ref(false);
 <template>
   <section class="mobile-page" aria-label="账号内容库">
     <section class="library-panel">
-      <MobileListHeader v-if="!detailFolder" class="library-topbar">
+      <MobileListHeader v-if="!detailFolder || library.activeKind === 'watch_later'" class="library-topbar">
         <UiTabs v-model="categoryFilter" :tabs="categoryTabs" />
         <template #actions>
           <MobileListActions
             v-if="account.profile.logged_in"
             v-model:search-open="searchOpen"
             search-label="搜索内容库"
+            :show-search="library.activeKind !== 'watch_later'"
             options-label="刷新内容库"
             options-icon="i-tabler-refresh"
-            :disabled="library.loading"
+            :disabled="library.loading || detailLoading"
             @options="load()"
           />
         </template>
@@ -53,6 +54,7 @@ const searchOpen = ref(false);
       <LibraryFolderDetail
         v-if="detailFolder"
         :folder="detailFolder"
+        :embedded="library.activeKind === 'watch_later'"
         :loading-initial="detailLoading"
         @back="closeFolder"
         @download="openDownloadSettings"
@@ -77,7 +79,7 @@ const searchOpen = ref(false);
         <UiEmptyState
           v-if="!account.profile.logged_in"
           title="登录后连接你的内容库"
-          description="浏览收藏夹和订阅合集，选择喜欢的视频下载。"
+          description="浏览我的收藏、订阅合集和稍后再看，选择视频下载。"
           icon="i-tabler-lock"
         >
           <template #action><UiButton @click="ui.openLoginDialog()">登录账号</UiButton></template>
@@ -154,7 +156,7 @@ const searchOpen = ref(false);
             :page="page.page"
             :total="page.total"
             :items-per-page="page.page_size"
-            :disabled="library.loading"
+            :disabled="library.loading || detailLoading"
             :label="`${activeCategory.label}分页`"
             @update:page="load(library.activeKind, $event)"
           />

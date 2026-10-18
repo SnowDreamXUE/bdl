@@ -940,6 +940,7 @@ fn media_refresh_intent(
         SourceKind::Cheese => episode_refresh_intent(part, "cheese")
             .or_else(|| video_refresh_intent(part, page_number)),
         SourceKind::Video
+        | SourceKind::WatchLater
         | SourceKind::Favorite
         | SourceKind::Collection
         | SourceKind::Series

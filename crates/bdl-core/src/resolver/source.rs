@@ -273,6 +273,7 @@ impl SourceResolver {
         options: ResolveOptions,
     ) -> BdlResult<NormalizedSourceTree> {
         match input.source_kind() {
+            SourceKind::WatchLater => super::watch_later::resolve_watch_later(&self.client).await,
             SourceKind::Video => {
                 VideoResolver::from_bpi_client(self.client.clone())
                     .resolve(input, options)

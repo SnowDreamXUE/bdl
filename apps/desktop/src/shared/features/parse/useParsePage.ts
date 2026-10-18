@@ -1,5 +1,6 @@
+import { useClipboardStore } from '../../stores/clipboard';
 import type { WorkflowStep } from '../../ui/WorkflowSteps.vue';
-import { computed, ref, useTemplateRef, watch } from 'vue';
+import { computed, onActivated, onDeactivated, onMounted, ref, useTemplateRef, watch } from 'vue';
 import { useParseStore } from '../../stores/parse';
 import { useUiStore } from '../../stores/ui';
 import { extractBilibiliInputs } from '../../utils/bilibiliLinks';
@@ -15,6 +16,20 @@ export function useParsePage() {
   const createLoading = computed(() => Boolean(parse.loadingBySource.__create__));
   const hasResults = computed(() => Boolean(parse.activeSource));
   const activeStage = ref<'source' | 'content'>(hasResults.value ? 'content' : 'source');
+  const clipboard = useClipboardStore();
+  let pageActive = false;
+  const acceptClipboard = () => {
+    const links = clipboard.additions;
+    if (!pageActive || !links.length) return;
+    parse.input = [...new Set([parse.input.trim(), ...(inputMode.value === 'single' ? [singleInput.value.trim()] : []), ...links].filter(Boolean))].join('\n');
+    inputMode.value = 'batch';
+    activeStage.value = 'source';
+    clipboard.additions = [];
+  };
+  onMounted(() => { pageActive = true; acceptClipboard(); });
+  onActivated(() => { pageActive = true; acceptClipboard(); });
+  onDeactivated(() => { pageActive = false; });
+  watch(() => clipboard.additions, acceptClipboard);
   const workflowSteps = computed<WorkflowStep[]>(() => [
     { value: 'source', label: '解析来源', description: '输入链接', complete: hasResults.value },
     {

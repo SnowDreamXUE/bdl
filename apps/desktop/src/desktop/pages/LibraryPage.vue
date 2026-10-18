@@ -14,13 +14,15 @@ const { account, library, ui, query, failedCoverIds, detailFolder, detailLoading
 <template>
   <section class="page-grid grid-cols-1" aria-label="账号内容库">
     <section class="panel library-panel">
-      <div v-if="!detailFolder" class="shrink-0">
+      <div v-if="!detailFolder || library.activeKind === 'watch_later'" class="shrink-0">
         <UiTabs v-model="categoryFilter" :tabs="categoryTabs" />
+        <UiButton v-if="library.activeKind === 'watch_later' && account.profile.logged_in" variant="ghost" :disabled="detailLoading" @click="load()">刷新稍后再看</UiButton>
       </div>
 
       <LibraryFolderDetail
         v-if="detailFolder"
         :folder="detailFolder"
+        :embedded="library.activeKind === 'watch_later'"
         :loading-initial="detailLoading"
         @back="closeFolder"
         @download="openDownloadSettings"

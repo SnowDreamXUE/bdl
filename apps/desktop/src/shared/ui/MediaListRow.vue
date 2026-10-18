@@ -25,6 +25,10 @@ watch(
     failed.value = false;
   },
 );
+function toggleCard(event: MouseEvent) {
+  if (props.disabled || (event.target instanceof Element && event.target.closest('button, input, a, label, [role="checkbox"]'))) return;
+  emit('toggle');
+}
 </script>
 
 <template>
@@ -33,6 +37,7 @@ watch(
     :class="{ 'is-selected': selected }"
     :data-selected="Boolean(selected)"
     role="listitem"
+    @click="toggleCard($event)"
   >
     <div class="media-selection">
       <UiCheckbox

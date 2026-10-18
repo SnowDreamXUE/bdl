@@ -13,8 +13,8 @@ import UiInlineNotice from '../../../shared/ui/InlineNotice.vue';
 import MobileSourceMenu from '../MobileSourceMenu.vue';
 
 import { useLibraryFolderDetail } from '../../../shared/features/library/useLibraryFolderDetail';
-import type { AccountLibraryFolder } from '../../../shared/api/dto';
-const props = defineProps<{ folder: AccountLibraryFolder; loadingInitial?: boolean }>();
+import type { LibraryContentSource } from '../../../shared/api/dto';
+const props = defineProps<{ folder: LibraryContentSource; embedded?: boolean; loadingInitial?: boolean }>();
 const emit = defineEmits<{ back: []; download: [] }>();
 const {
   parse,
@@ -60,7 +60,7 @@ const visibleItems = computed(() => {
 <template>
   <section class="mobile-folder" :aria-busy="loading">
     <header class="mobile-detail-heading folder-heading">
-      <button type="button" class="mobile-icon-button" aria-label="返回内容集合" @click="emit('back')">
+      <button type="button" class="mobile-icon-button" v-if="!embedded" aria-label="返回内容集合" @click="emit('back')">
         <UIcon name="i-tabler-arrow-left" />
       </button>
       <div class="mobile-detail-copy">
