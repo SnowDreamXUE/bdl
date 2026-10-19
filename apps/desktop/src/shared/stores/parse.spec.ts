@@ -62,6 +62,57 @@ const sourceTree = (id: string, title: string): NormalizedSourceTree => ({
 vi.mock('../api/tauri', () => api)
 
 describe('parse store', () => {
+  it.each(['loadMore', 'loadPage', 'loadChunk'] as const)('retains diagnostics through %s and clears them after retry', async (method) => {
+    const parse = useParseStore()
+    const tree = sourceTree('source:page-error', '分页来源')
+    tree.source.has_more = true
+    parse.upsertSource(tree)
+    const failure = Object.assign(new Error('解析失败'), { code: 'bilibili_api_error', detail: 'HTTP 429; token=private-token' })
+    api.parseLoadMore.mockRejectedValueOnce(failure)
+    api.parseLoadPage.mockRejectedValueOnce(failure)
+    await parse[method](tree.source.id, 2)
+    expect(parse.errorDetailsBySource[tree.source.id]).toContain('HTTP 429')
+    expect(parse.errorDetailsBySource[tree.source.id]).not.toContain('private-token')
+    parse.upsertSource(tree)
+    expect(parse.errorDetailsBySource[tree.source.id]).toBeNull()
+  })
+  it('stops background work when the restriction is only in command detail and retains it', async () => {
+    const parse = useParseStore()
+    useSettingsStore().loaded = true
+    const tree = sourceTree('source:background-error', '后台来源')
+    tree.groups[0]!.items.push(sourceTree('second', '第二条').groups[0]!.items[0]!)
+    parse.upsertSource(tree)
+    api.selectionCreateTasks.mockRejectedValue(Object.assign(new Error('解析失败'), {
+      code: 'bilibili_api_error', detail: 'HTTP 429; token=private-token',
+    }))
+    await parse.startBackgroundDownload(tree.source.id)
+    expect(api.selectionCreateTasks).toHaveBeenCalledTimes(1)
+    expect(parse.backgroundJob?.status).toBe('failed')
+    expect(parse.backgroundJob?.detail).toContain('HTTP 429')
+    expect(parse.backgroundJob?.detail).not.toContain('private-token')
+  })
+
+  it('retains redacted command diagnostics for initial parse and download planning failures', async () => {
+    const parse = useParseStore()
+    useSettingsStore().loaded = true
+    const error = Object.assign(new Error('解析失败，请稍后重试'), {
+      code: 'bilibili_api_error',
+      detail: 'bpi error: HTTP 412; SESSDATA=secret-cookie',
+    })
+    api.parseCreateSource.mockRejectedValueOnce(error)
+    await parse.createSource('BV1xx411c8m1')
+    expect(parse.notice?.detail).toContain('bilibili_api_error')
+    expect(parse.notice?.detail).toContain('HTTP 412')
+    expect(parse.notice?.detail).toContain('BV1xx411c8m1')
+    expect(parse.notice?.detail).not.toContain('secret-cookie')
+    parse.upsertSource(sourceTree('source:diagnostic', '测试视频'))
+    api.selectionCreateTasks.mockRejectedValueOnce(error)
+    const result = await parse.createTasksForSources(['source:diagnostic'])
+    expect(result?.failures[0]?.detail).toContain('HTTP 412')
+    expect(result?.failures[0]?.detail).toContain('测试视频')
+    expect(result?.failures[0]?.detail).not.toContain('secret-cookie')
+  })
+
   it('parses only the requested batch, retains failures and retries without creating downloads', async () => {
     const parse = useParseStore()
     const tree = sourceTree('watch_later:batch', '稍后再看')
@@ -628,6 +679,8 @@ describe('parse store', () => {
     expect(result?.failures).toEqual([
       {
         sourceId: 'source:failed-download',
+        detail: expect.stringContaining('HTTP 412'),
+        stopBackground: true,
         message: 'Bilibili 暂时拒绝了请求（HTTP 412），请稍后重试。',
       },
     ])

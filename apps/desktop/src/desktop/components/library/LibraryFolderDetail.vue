@@ -15,7 +15,7 @@ import { useLibraryFolderDetail } from "../../../shared/features/library/useLibr
 import type { LibraryContentSource } from "../../../shared/api/dto";
 const props = defineProps<{folder: LibraryContentSource; embedded?: boolean; loadingInitial?: boolean}>();
 const emit = defineEmits<{back: []; download: []}>();
-const { parse, pageSize, currentPage, loadBatchSize, source, sourceId, items, totalCount, totalPages, pageItems, selectedCount, sourceRequestLoading, pacedParsing, pacedWaiting, pacedStopping, loading, activeError, hasMore, itemOwnerName, toggleItem, toggleCurrentPageSelection, clearSelection, downloadSelected, parseMore, parseAll, stopParsing, downloadAll, goToPage } = useLibraryFolderDetail(props, () => emit("download"));
+const { parse, pageSize, currentPage, loadBatchSize, source, sourceId, items, totalCount, totalPages, pageItems, selectedCount, sourceRequestLoading, pacedParsing, pacedWaiting, pacedStopping, loading, activeError, activeErrorDetail, hasMore, itemOwnerName, toggleItem, toggleCurrentPageSelection, clearSelection, downloadSelected, parseMore, parseAll, stopParsing, downloadAll, goToPage } = useLibraryFolderDetail(props, () => emit("download"));
 const rows = computed(() => pageItems.value.map((item) => ({ id: item.id, title: item.title, meta: itemOwnerName(item), partIds: item.parts.map((part) => part.id) })));
 </script>
 <template>
@@ -74,8 +74,8 @@ const rows = computed(() => pageItems.value.map((item) => ({ id: item.id, title:
       </div>
     </header>
 
-    <UiInlineNotice v-if="parse.notice" :tone="parse.notice.tone">{{ parse.notice.message }}</UiInlineNotice>
-    <UiInlineNotice v-if="activeError" tone="danger">{{ activeError }}</UiInlineNotice>
+    <UiInlineNotice v-if="parse.notice" :tone="parse.notice.tone" :detail="parse.notice.detail">{{ parse.notice.message }}</UiInlineNotice>
+    <UiInlineNotice v-if="activeError" tone="danger" :detail="activeErrorDetail ?? undefined">{{ activeError }}</UiInlineNotice>
 
     <div v-if="loadingInitial" class="library-detail-skeleton" role="status" aria-label="正在加载合集内容">
       <div v-for="index in 6" :key="index" class="library-detail-skeleton-row" aria-hidden="true"><span></span><i></i></div>

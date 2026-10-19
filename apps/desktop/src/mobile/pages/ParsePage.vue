@@ -24,7 +24,7 @@ const {
   <section class="mobile-page mobile-parse-page">
     <UiInlineNotice
       v-if="parse.notice"
-      :tone="parse.notice.tone"
+      :tone="parse.notice.tone" :detail="parse.notice.detail"
       :action-label="parse.notice.actionLabel"
       @action="runNoticeAction"
       >{{ parse.notice.message }}</UiInlineNotice

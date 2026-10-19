@@ -46,6 +46,7 @@ export function useLibraryFolderDetail(
   );
   const loading = computed(() => props.loadingInitial || sourceRequestLoading.value || pacedParsing.value);
   const activeError = computed(() => (sourceId.value ? parse.errorsBySource[sourceId.value] : null));
+  const activeErrorDetail = computed(() => (sourceId.value ? parse.errorDetailsBySource[sourceId.value] : null));
   const hasMore = computed(() => Boolean(source.value?.source.has_more));
   watch(
     sourceId,
@@ -151,6 +152,7 @@ export function useLibraryFolderDetail(
     pacedStopping,
     loading,
     activeError,
+    activeErrorDetail,
     hasMore,
     itemOwnerName,
     itemSelected,

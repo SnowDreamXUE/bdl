@@ -1,5 +1,7 @@
 import { defineStore } from 'pinia'
 
+import { commandDiagnostic } from '../utils/commandDiagnostic'
+
 import type {
   DocumentTreeDirectory,
   DownloadMediaMode,
@@ -41,13 +43,14 @@ interface BackgroundParseJob {
   created: number
   skipped: number
   error: string | null
-  failures: Array<{ partId: string; title: string; message: string }>
+  detail?: string
+  failures: Array<{ partId: string; title: string; message: string; detail?: string }>
   donePartIds: string[]
   options: CreateTaskOptions
 }
 
 interface ParseState {
-  preparationBySource: Record<string, { total: number; processed: number; failures: Array<{ itemId: string; title: string; message: string; partIds: string[] }> }>
+  preparationBySource: Record<string, { total: number; processed: number; failures: Array<{ itemId: string; title: string; message: string; detail?: string; partIds: string[] }> }>
   createGeneration: number
   backgroundJob: BackgroundParseJob | null
   input: string
@@ -62,6 +65,7 @@ interface ParseState {
   pacedParsingBySource: Record<string, boolean>
   pacedParsingWaitingBySource: Record<string, boolean>
   pacedParsingStopRequestedBySource: Record<string, boolean>
+  errorDetailsBySource: Record<string, string | null>
   errorsBySource: Record<string, string | null>
   notice: InlineNotice | null
   noticeTimer: number | null
@@ -105,7 +109,7 @@ export interface CreateTaskOptions {
 export interface CreateTasksForSourcesResult extends SelectionCreateTasksResult {
   pendingSourceIds: string[]
   failedSourceIds: string[]
-  failures: Array<{ sourceId: string; message: string }>
+  failures: Array<{ sourceId: string; message: string; detail?: string; stopBackground?: boolean }>
 }
 
 const mediaPreferencesForTaskRequest = (
@@ -150,6 +154,7 @@ export const useParseStore = defineStore('parse', {
     pacedParsingWaitingBySource: {},
     pacedParsingStopRequestedBySource: {},
     errorsBySource: {},
+    errorDetailsBySource: {},
     notice: null,
     noticeTimer: null,
   }),
@@ -174,14 +179,19 @@ export const useParseStore = defineStore('parse', {
     },
   },
   actions: {
-    setNotice(message: string, tone: NoticeTone = 'info', actionLabel?: string) {
-      this.notice = { message, tone, actionLabel }
+    recordSourceFailure(sourceId: string, error: unknown, operation = '解析来源') {
+      if (!this.sources[sourceId]) return
+      this.errorsBySource[sourceId] = errorMessage(error)
+      this.errorDetailsBySource[sourceId] = commandDiagnostic(error, `操作: ${operation}\n来源: ${this.sources[sourceId].source.title}\n链接: ${this.sources[sourceId].source.input}`)
+    },
+    setNotice(message: string, tone: NoticeTone = 'info', actionLabel?: string, detail?: string) {
+      this.notice = { message, tone, actionLabel, detail }
       if (this.noticeTimer !== null && typeof window !== 'undefined') {
         window.clearTimeout(this.noticeTimer)
         this.noticeTimer = null
       }
 
-      if (tone !== 'danger' && typeof window !== 'undefined') {
+      if (tone !== 'danger' && !detail && typeof window !== 'undefined') {
         this.noticeTimer = window.setTimeout(() => {
           this.notice = null
           this.noticeTimer = null
@@ -224,9 +234,9 @@ export const useParseStore = defineStore('parse', {
               fetch_streams: false,
               expand_video_collection: !batch && !options.singleVideo,
             })
-            return { input: sourceInput, tree, error: null }
+            return { input: sourceInput, tree, error: null, detail: '' }
           } catch (error) {
-            return { input: sourceInput, tree: null, error: errorMessage(error) }
+            return { input: sourceInput, tree: null, error: errorMessage(error), detail: commandDiagnostic(error, `操作: 解析链接\n来源: ${sourceInput}`) }
           }
         })
         if (generation !== this.createGeneration) {
@@ -252,7 +262,7 @@ export const useParseStore = defineStore('parse', {
         }
         const trees = uniqueSourceTrees(validOutcomes.map((outcome) => outcome.tree))
         if (trees.length === 0) {
-          this.setNotice(failures[0]?.error ?? '解析失败', 'danger')
+          this.setNotice(failures[0]?.error ?? '解析失败', 'danger', undefined, failures.map((failure) => failure.detail).filter(Boolean).join('\n\n'))
           return false
         }
 
@@ -266,6 +276,7 @@ export const useParseStore = defineStore('parse', {
           const sourceId = tree.source.id
           this.sources[sourceId] = tree
           this.errorsBySource[sourceId] = null
+          this.errorDetailsBySource[sourceId] = null
           this.selectionBySource[sourceId] = batch ? [] : defaultSelection(tree)
         }
         this.sourceOrder = trees.map((tree) => tree.source.id)
@@ -294,7 +305,7 @@ export const useParseStore = defineStore('parse', {
         this.syncBatchSelection()
         if (!options.singleVideo) this.input = failures.map((failure) => failure.input).join('\n')
         if (failures.length > 0) {
-          this.setNotice(`已解析 ${validOutcomes.length} 个链接，${failures.length} 个失败已保留`, 'warning')
+          this.setNotice(`已解析 ${validOutcomes.length} 个链接，${failures.length} 个失败已保留`, 'warning', undefined, failures.map((failure) => failure.detail).filter(Boolean).join('\n\n'))
         } else {
           this.clearNotice()
         }
@@ -310,7 +321,7 @@ export const useParseStore = defineStore('parse', {
         const tree = await parseLoadMore({ source_id: sourceId })
         this.upsertSource(tree)
       } catch (error) {
-        if (!this.pacedParsingStopRequestedBySource[sourceId]) this.errorsBySource[sourceId] = errorMessage(error)
+        if (!this.pacedParsingStopRequestedBySource[sourceId]) this.recordSourceFailure(sourceId, error)
       } finally {
         this.loadingBySource[sourceId] = false
       }
@@ -319,13 +330,14 @@ export const useParseStore = defineStore('parse', {
       if (!this.sources[sourceId] || this.loadingBySource[sourceId] || this.pacedParsingBySource[sourceId]) return null
       this.loadingBySource[sourceId] = true
       this.errorsBySource[sourceId] = null
+      this.errorDetailsBySource[sourceId] = null
       try {
         const result = await parseLoadPage({ source_id: sourceId, page_number: pageNumber })
         if (!this.sources[sourceId]) return null
         this.upsertSource(result.tree)
         return result.item_ids
       } catch (error) {
-        if (this.sources[sourceId]) this.errorsBySource[sourceId] = errorMessage(error)
+        if (this.sources[sourceId]) this.recordSourceFailure(sourceId, error, `加载第 ${pageNumber} 页`)
         return null
       } finally {
         this.loadingBySource[sourceId] = false
@@ -339,6 +351,7 @@ export const useParseStore = defineStore('parse', {
       if (!this.pacedParsingBySource[sourceId]) this.pacedParsingStopRequestedBySource[sourceId] = false
       this.loadingBySource[sourceId] = true
       this.errorsBySource[sourceId] = null
+      this.errorDetailsBySource[sourceId] = null
       try {
         while (this.sources[sourceId]?.source.has_more && this.sources[sourceId].source.loaded_count < limit) {
           if (this.pacedParsingStopRequestedBySource[sourceId]) break
@@ -351,7 +364,7 @@ export const useParseStore = defineStore('parse', {
         }
         return (this.sources[sourceId]?.source.loaded_count ?? 0) > loadedBefore
       } catch (error) {
-        if (!this.pacedParsingStopRequestedBySource[sourceId]) this.errorsBySource[sourceId] = errorMessage(error)
+        if (!this.pacedParsingStopRequestedBySource[sourceId]) this.recordSourceFailure(sourceId, error)
         return false
       } finally {
         this.loadingBySource[sourceId] = false
@@ -380,6 +393,7 @@ export const useParseStore = defineStore('parse', {
       this.pacedParsingBySource[sourceId] = true
       this.pacedParsingStopRequestedBySource[sourceId] = false
       this.errorsBySource[sourceId] = null
+      this.errorDetailsBySource[sourceId] = null
       const stopped = () => generation !== this.createGeneration || !this.sources[sourceId] || this.pacedParsingStopRequestedBySource[sourceId]
       try {
         for (const target of targets) {
@@ -393,9 +407,9 @@ export const useParseStore = defineStore('parse', {
             if (stopped()) break
             const message = errorMessage(error)
             progress.failures = progress.failures.filter(failure => failure.itemId !== target.itemId)
-            progress.failures.push({ ...target, message })
-            if (shouldStopBackgroundParsing(message)) {
-              this.errorsBySource[sourceId] = message
+            progress.failures.push({ ...target, message, detail: commandDiagnostic(error, `操作: 解析视频\n来源: ${source.source.title}\n视频: ${target.title}`) })
+            if (shouldStopBackgroundParsing(errorCause(error))) {
+              this.recordSourceFailure(sourceId, error)
               progress.processed++
               break
             }
@@ -415,11 +429,13 @@ export const useParseStore = defineStore('parse', {
       let job: BackgroundParseJob = previous ?? { sourceId, title: source.source.title, status: 'running', processed: 0, created: 0, skipped: 0, error: null, failures: [], donePartIds: [], options: {} }
       job.status = 'running'
       job.error = null
+      job.detail = undefined
       this.backgroundJob = job
       job = this.backgroundJob
       this.pacedParsingBySource[sourceId] = true
       this.pacedParsingStopRequestedBySource[sourceId] = false
       this.errorsBySource[sourceId] = null
+      this.errorDetailsBySource[sourceId] = null
       const done = new Set(job.donePartIds)
       const retryIds = retryFailed ? job.failures.map((failure) => failure.partId) : null
       retryIds?.forEach((id) => done.delete(id))
@@ -458,10 +474,10 @@ export const useParseStore = defineStore('parse', {
             if (stopped() && (!result || result.failures.length)) break
             const message = !result || result.failures.length || result.requires_confirmation
               ? result?.failures[0]?.message ?? '后台创建下载任务失败' : null
-            if (message && shouldStopBackgroundParsing(message)) throw new Error(message)
+            if (message && (result?.failures[0]?.stopBackground ?? shouldStopBackgroundParsing(message))) throw Object.assign(new Error(message), { detail: result?.failures[0]?.detail })
             const wasFailed = job.failures.some((failure) => failure.partId === partId)
             job.failures = job.failures.filter((failure) => failure.partId !== partId)
-            if (message) job.failures.push({ partId, title, message })
+            if (message) job.failures.push({ partId, title, message, detail: result?.failures[0]?.detail })
             ids.forEach((id) => done.add(id))
             // Hydration can replace placeholder IDs with real part IDs.
             if (!message) collectPartIds(this.sources[sourceId]).filter((id) => !beforeIds.has(id)).forEach((id) => done.add(id))
@@ -474,7 +490,7 @@ export const useParseStore = defineStore('parse', {
           }
           if (retryFailed || stopped() || !this.sources[sourceId]?.source.has_more) break
           const progressed = await this.loadChunk(sourceId, 1)
-          if (!progressed && !stopped()) throw new Error(this.errorsBySource[sourceId] ?? '分页没有返回新内容，已停止后台解析')
+          if (!progressed && !stopped()) throw Object.assign(new Error(this.errorsBySource[sourceId] ?? '分页没有返回新内容，已停止后台解析'), { detail: this.errorDetailsBySource[sourceId] })
         }
         const remaining = retryFailed && this.sources[sourceId] && (this.sources[sourceId].source.has_more || collectPartIds(this.sources[sourceId]).some((id) => !done.has(id)))
         if (this.backgroundJob) this.backgroundJob.status = stopped() || remaining ? 'stopped' : 'completed'
@@ -482,8 +498,9 @@ export const useParseStore = defineStore('parse', {
         if (this.backgroundJob) {
           this.backgroundJob.status = stopped() ? 'stopped' : 'failed'
           this.backgroundJob.error = stopped() ? null : errorMessage(error)
+          this.backgroundJob.detail = stopped() ? undefined : commandDiagnostic(error, `操作: 后台解析下载\n来源: ${source.source.title}`)
         }
-        if (!stopped()) this.errorsBySource[sourceId] = errorMessage(error)
+        if (!stopped()) this.recordSourceFailure(sourceId, error)
       } finally {
         this.pacedParsingBySource[sourceId] = false
         this.pacedParsingStopRequestedBySource[sourceId] = false
@@ -531,7 +548,7 @@ export const useParseStore = defineStore('parse', {
       if (this.pacedParsingBySource[sourceId] || this.loadingBySource[sourceId]) {
         this.pacedParsingStopRequestedBySource[sourceId] = true
         void parseCancel(sourceId).catch((error) => {
-          this.setNotice(`停止请求未送达：${errorMessage(error)}`, 'warning')
+          this.setNotice(`停止请求未送达：${errorMessage(error)}`, 'warning', undefined, commandDiagnostic(error, `操作: 停止解析\n来源: ${sourceId}`))
         })
       }
     },
@@ -560,6 +577,7 @@ export const useParseStore = defineStore('parse', {
       this.pacedParsingWaitingBySource = {}
       this.pacedParsingStopRequestedBySource = {}
       this.errorsBySource = {}
+      this.errorDetailsBySource = {}
 
       await Promise.allSettled(sourceIds.map((sourceId) => parseCloseSource(sourceId)))
     },
@@ -573,6 +591,7 @@ export const useParseStore = defineStore('parse', {
         delete this.preparationBySource[sourceId]
         delete this.selectionBySource[sourceId]
         delete this.errorsBySource[sourceId]
+        delete this.errorDetailsBySource[sourceId]
         delete this.pacedParsingBySource[sourceId]
         delete this.pacedParsingWaitingBySource[sourceId]
         delete this.pacedParsingStopRequestedBySource[sourceId]
@@ -783,7 +802,7 @@ export const useParseStore = defineStore('parse', {
           } catch (error) {
             const message = errorMessage(error)
             aggregate.failedSourceIds.push(sourceId)
-            aggregate.failures.push({ sourceId, message })
+            aggregate.failures.push({ sourceId, message, stopBackground: shouldStopBackgroundParsing(errorCause(error)), detail: commandDiagnostic(error, `操作: 创建下载任务\n来源: ${this.sources[sourceId]?.source.title ?? sourceId}\n链接: ${this.sources[sourceId]?.source.input ?? sourceId}\n所选分集: ${(options.partIdsBySource?.[sourceId] ?? this.selectionBySource[sourceId] ?? []).join(", ")}\n预设: ${options.downloadPresetId ?? "自定义"}`) })
           }
         }
 
@@ -833,6 +852,7 @@ export const useParseStore = defineStore('parse', {
       }
       if (!this.activeSourceId) this.activeSourceId = sourceId
       this.errorsBySource[sourceId] = null
+      this.errorDetailsBySource[sourceId] = null
       this.selectionBySource[sourceId] = this.selectionBySource[sourceId] ?? defaultSelection(tree)
     },
   },
@@ -937,6 +957,11 @@ const errorMessage = (error: unknown): string => {
   }
 
   return String(error)
+}
+
+const errorCause = (error: unknown): string => {
+  const detail = error && typeof error === 'object' && 'detail' in error ? error.detail : null
+  return `${errorMessage(error)}${typeof detail === 'string' ? `\n${detail}` : ''}`
 }
 
 const shouldStopBackgroundParsing = (message: string): boolean => {

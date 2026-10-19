@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import type { NoticeTone } from '../stores/feedback'
 import UiButton from './Button.vue'
+import ErrorDetails from './ErrorDetails.vue'
 
 const props = withDefaults(
   defineProps<{
     tone?: NoticeTone
     actionLabel?: string
+    detail?: string
   }>(),
   {
     tone: 'info',
@@ -24,6 +26,7 @@ const emit = defineEmits<{
     <UiButton v-if="props.actionLabel" size="compact" variant="secondary" @click="emit('action')">
       {{ props.actionLabel }}
     </UiButton>
+    <ErrorDetails v-if="props.detail" class="notice-details" :detail="props.detail" />
   </div>
 </template>
 
@@ -48,6 +51,10 @@ const emit = defineEmits<{
   height: 0.5rem;
   border-radius: 62.4375rem;
   background: var(--feedback-accent);
+}
+
+.notice-details {
+  grid-column: 2 / -1;
 }
 
 .inline-notice p {

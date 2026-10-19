@@ -3,6 +3,7 @@ export type NoticeTone = 'info' | 'success' | 'warning' | 'danger'
 export interface InlineNotice {
   message: string
   tone: NoticeTone
+  detail?: string
   actionLabel?: string
 }
 

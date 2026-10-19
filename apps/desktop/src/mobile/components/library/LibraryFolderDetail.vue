@@ -34,7 +34,7 @@ const {
 
   pacedStopping,
   loading,
-  activeError,
+  activeError, activeErrorDetail,
   hasMore,
   itemOwnerName,
   currentPageSelected,
@@ -93,8 +93,8 @@ const visibleItems = computed(() => {
       @download-all="downloadAll"
       @stop="stopParsing"
     />
-    <UiInlineNotice v-if="parse.notice" :tone="parse.notice.tone">{{ parse.notice.message }}</UiInlineNotice>
-    <UiInlineNotice v-if="activeError" tone="danger">{{ activeError }}</UiInlineNotice>
+    <UiInlineNotice v-if="parse.notice" :tone="parse.notice.tone" :detail="parse.notice.detail">{{ parse.notice.message }}</UiInlineNotice>
+    <UiInlineNotice v-if="activeError" tone="danger" :detail="activeErrorDetail ?? undefined">{{ activeError }}</UiInlineNotice>
     <div v-if="loadingInitial" class="folder-loading" role="status">正在加载内容…</div>
     <template v-else>
     <CollectionTree

@@ -28,6 +28,7 @@ export function useParseResultWorkspace(onDownload: () => void) {
   );
   const activeLoading = computed(() => sourceRequestLoading.value || pacedParsing.value);
   const activeError = computed(() => (activeSource.value ? parse.errorsBySource[activeSource.value.source.id] : null));
+  const activeErrorDetail = computed(() => (activeSource.value ? parse.errorDetailsBySource[activeSource.value.source.id] : null));
   const hasMore = computed(() => Boolean(activeSource.value?.source.has_more));
   const allRowsSelected = computed(
     () =>
@@ -91,6 +92,7 @@ export function useParseResultWorkspace(onDownload: () => void) {
     pacedStopping,
     activeLoading,
     activeError,
+    activeErrorDetail,
     hasMore,
     allRowsSelected,
     canCreateTasks,

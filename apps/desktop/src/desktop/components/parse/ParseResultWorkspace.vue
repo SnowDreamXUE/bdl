@@ -25,7 +25,7 @@ const {
   pacedWaiting,
   pacedStopping,
   activeLoading,
-  activeError,
+  activeError, activeErrorDetail,
   hasMore,
   canCreateTasks,
   createTaskLabel,
@@ -122,7 +122,7 @@ const {
       compact
       embedded
     />
-    <UiInlineNotice v-if="activeError" tone="danger">{{ activeError }}</UiInlineNotice>
+    <UiInlineNotice v-if="activeError" tone="danger" :detail="activeErrorDetail ?? undefined">{{ activeError }}</UiInlineNotice>
 
     <SelectionActionBar :selected-count="selectedCount" :total-count="totalPartCount">
       <template #selection>

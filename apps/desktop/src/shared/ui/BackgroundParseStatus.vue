@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useParseStore } from '../stores/parse'
+import ErrorDetails from './ErrorDetails.vue'
 import UiButton from './Button.vue'
 import ParseActivityStatus from './ParseActivityStatus.vue'
 const parse = useParseStore()
@@ -15,11 +16,13 @@ const parse = useParseStore()
       </span>
       <ParseActivityStatus v-if="parse.backgroundJob.status === 'running'" class="text-xs text-(--color-muted)" :source-id="parse.backgroundJob.sourceId" :stopping="parse.pacedParsingStopRequestedBySource[parse.backgroundJob.sourceId]" />
       <span v-if="parse.backgroundJob.error" class="break-all text-xs text-(--color-danger)">{{ parse.backgroundJob.error }}</span>
+      <ErrorDetails v-if="parse.backgroundJob.detail" :detail="parse.backgroundJob.detail" />
       <details v-if="parse.backgroundJob.failures.length" class="text-xs text-(--color-danger)">
         <summary class="cursor-pointer">{{ parse.backgroundJob.failures.length }} 项失败，展开查看</summary>
         <ul class="m-0 grid max-h-40 gap-2 overflow-y-auto py-2 pl-4">
           <li v-for="failure in parse.backgroundJob.failures" :key="failure.partId" class="break-all">
             {{ failure.title }}：{{ failure.message }}
+            <ErrorDetails v-if="failure.detail" :detail="failure.detail" />
           </li>
         </ul>
       </details>

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { commandDiagnostic } from '../../utils/commandDiagnostic'
+import ErrorDetails from '../../ui/ErrorDetails.vue'
 import { open } from '@tauri-apps/plugin-dialog'
 import { computed, ref, watch } from 'vue'
 
@@ -51,6 +53,7 @@ const scheduleMin = ref('')
 const scheduleValidationNow = ref(Date.now())
 const sizeEstimate = ref<{ estimated_bytes: number; estimated_parts: number; unknown_streams: number } | null>(null)
 const sizeEstimateLoading = ref(false)
+const sizeEstimateError = ref('')
 let sizeEstimateRevision = 0
 
 const androidPlatform = isAndroidPlatform()
@@ -99,13 +102,17 @@ const refreshSizeEstimate = async () => {
   if (!downloadDialogOpen.value || selectedSourceIds.value.length === 0) return
   const revision = ++sizeEstimateRevision
   sizeEstimateLoading.value = true
+  sizeEstimateError.value = ''
   try {
     const estimate = await parse.estimateDownloadSizeForSources(selectedSourceIds.value, {
       downloadPresetId: downloadPresetId.value,
     })
     if (revision === sizeEstimateRevision) sizeEstimate.value = estimate
-  } catch {
-    if (revision === sizeEstimateRevision) sizeEstimate.value = null
+  } catch (error) {
+    if (revision === sizeEstimateRevision) {
+      sizeEstimate.value = null
+      sizeEstimateError.value = commandDiagnostic(error, `操作: 估算下载大小\n来源: ${selectionTitle.value}`)
+    }
   } finally {
     if (revision === sizeEstimateRevision) sizeEstimateLoading.value = false
   }
@@ -147,6 +154,7 @@ const openDialog = async () => {
   duplicatePendingSourceIds.value = []
   downloadNotice.value = null
   sizeEstimate.value = null
+  sizeEstimateError.value = ''
   downloadDialogOpen.value = true
 }
 
@@ -198,6 +206,7 @@ const createTasks = async (duplicatePolicy: DuplicateTaskPolicy = 'ask') => {
           ? firstFailure.message
           : `${result.failures.length} 个来源创建任务失败：${firstFailure.message}`,
       tone: result.created.length > 0 ? 'warning' : 'danger',
+      detail: result.failures.map((failure) => failure.detail ?? failure.message).join('\n\n'),
     }
     downloadDialogOpen.value = true
     return
@@ -233,6 +242,7 @@ const chooseDownloadDir = async () => {
   } catch (error) {
     downloadNotice.value = {
       message: error instanceof Error ? error.message : String(error),
+      detail: commandDiagnostic(error, '操作: 选择下载目录'),
       tone: 'warning',
     }
   }
@@ -245,6 +255,7 @@ const chooseDocumentTreeOutput = async () => {
   } catch (error) {
     downloadNotice.value = {
       message: error instanceof Error ? error.message : String(error),
+      detail: commandDiagnostic(error, '操作: 选择下载目录'),
       tone: 'warning',
     }
   }
@@ -256,7 +267,8 @@ const chooseDocumentTreeOutput = async () => {
   <UiDialog v-model="downloadDialogOpen" title="下载设置" :description="`${selectionTitle} · ${selectedCount} ${selectionUnit}`" fixed-height>
     <UiTabs v-model="activeTab" :tabs="tabs" />
     <div :key="activeTab" class="download-options-scroll">
-      <UiInlineNotice v-if="downloadNotice" :tone="downloadNotice.tone">{{ downloadNotice.message }}</UiInlineNotice>
+      <UiInlineNotice v-if="downloadNotice" :tone="downloadNotice.tone" :detail="downloadNotice.detail">{{ downloadNotice.message }}</UiInlineNotice>
+      <ErrorDetails v-if="sizeEstimateError && !downloadNotice" :detail="sizeEstimateError" />
       <div class="grid content-start gap-4">
         <div v-show="activeTab === 'general'" class="grid gap-4">
           <UiSelect v-model="downloadPresetId" label="下载预设" :options="settings.saved.download_presets.map((preset) => ({ label: preset.name, value: preset.id }))" :disabled="activeLoading" helper="在设置 → 下载预设中新增或修改，自动记住上次选择" />

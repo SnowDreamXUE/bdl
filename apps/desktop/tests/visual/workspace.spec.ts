@@ -302,6 +302,7 @@ const installTauriMock = async (
                 has_more: false,
               };
             }
+            if (command === 'selection_estimate_size') return { estimated_bytes: 0, estimated_parts: 0, unknown_streams: 1 };
             if (command === 'selection_create_tasks') {
               if (taskCreationFails) {
                 throw {
@@ -2343,7 +2344,7 @@ for (const theme of ['light', 'dark'] as const) {
     await expect(status).toContainText('1 项失败');
     const before = await page.evaluate(() => (window as unknown as { __TASK_ATTEMPTS__: string[] }).__TASK_ATTEMPTS__.length);
     expect(before).toBeGreaterThan(1);
-    await status.locator('summary').focus();
+    await status.getByText('1 项失败，展开查看', { exact: true }).focus();
     await page.keyboard.press('Enter');
     for (const width of [1280, 375, 568]) {
       await page.setViewportSize({ width, height: width === 568 ? 356 : 844 });
@@ -2456,7 +2457,10 @@ test('task-creation errors stay inside download settings instead of the parse pa
 
   const dialog = page.getByRole('dialog', { name: '下载设置' });
   await dialog.getByRole('button', { name: '开始下载' }).click();
-  await expect(dialog.getByText(/Bilibili 暂时拒绝了请求/)).toBeVisible();
+  await expect(dialog.locator('.inline-notice > p').filter({ hasText: 'Bilibili 暂时拒绝了请求' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '复制诊断信息' })).toBeVisible();
+  await dialog.getByText('错误详情', { exact: true }).click();
+  await expect(dialog.locator('.error-details pre')).toContainText('bilibili_request_rejected');
 
   await dialog.getByRole('button', { name: '取消' }).click();
   await expect(page.getByText(/Bilibili 暂时拒绝了请求/)).toHaveCount(0);
@@ -4154,3 +4158,172 @@ for (const device of ['desktop', 'android'] as const) {
     });
   }
 }
+
+
+for (const device of ['desktop', 'phone'] as const) {
+  for (const theme of ['light', 'dark'] as const) {
+    test(`parse failure diagnostics ${device} ${theme}`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width: device === 'phone' ? 375 : 1280, height: 800 });
+      await installTauriMock(page, theme);
+      await page.addInitScript(({ phone }) => {
+        if (phone) Object.defineProperty(navigator, 'userAgent', { value: 'Mozilla/5.0 (Linux; Android 12) Mobile' });
+        const target = window as unknown as {
+          __TAURI_INTERNALS__: { invoke: (command: string, args?: unknown) => Promise<unknown> };
+          copiedDiagnostic?: string;
+          failCopy?: boolean;
+          feedbackUrl?: string;
+        };
+        Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (text: string) => {
+          if (target.failCopy) throw new Error('clipboard denied');
+          target.copiedDiagnostic = text;
+        } } });
+        const invoke = target.__TAURI_INTERNALS__.invoke;
+        target.__TAURI_INTERNALS__.invoke = async (command, args) => {
+          if (command === 'parse_create_source') throw {
+            code: 'bilibili_api_error', message: 'bpi error: failed to decode response',
+            detail: 'HTTP 412; response field missing; SESSDATA=secret-cookie; ' + 'long_reason_'.repeat(100),
+          };
+          if (command === 'open_external_url') { target.feedbackUrl = (args as { url: string }).url; return; }
+          return invoke(command, args);
+        };
+      }, { phone: device === 'phone' });
+      await page.goto('/');
+      await page.getByLabel('Bilibili 链接或 BV / AV').fill('BV1xx411c7mD');
+      await page.getByRole('button', { name: '开始解析' }).click();
+      const error = page.locator('.error-details');
+      await expect(error).toBeVisible();
+      const summary = error.locator('summary');
+      await summary.focus();
+      await page.keyboard.press('Enter');
+      await expect(error.locator('pre')).toBeVisible();
+      await expect(error.locator('pre')).toContainText('HTTP 412');
+      await expect(error.locator('pre')).not.toContainText('secret-cookie');
+      await error.getByRole('button', { name: '复制诊断信息' }).click();
+      await expect(error.getByRole('button', { name: '已复制' })).toBeVisible();
+      const copied = await page.evaluate(() => (window as unknown as { copiedDiagnostic: string }).copiedDiagnostic);
+      expect(copied).toContain('bilibili_api_error');
+      expect(copied).toContain('BV1xx411c7mD');
+      expect(copied).toContain('当前环境');
+      expect(copied).not.toContain('secret-cookie');
+      await error.getByRole('button', { name: '反馈问题' }).click();
+      expect(await page.evaluate(() => (window as unknown as { feedbackUrl: string }).feedbackUrl)).toBe('https://github.com/Yuelioi/bdl/issues/new/choose');
+      await page.evaluate(() => { (window as unknown as { failCopy: boolean }).failCopy = true; });
+      await error.getByRole('button', { name: '已复制' }).click();
+      await expect(error.getByText('复制失败，请展开错误详情后手动复制。')).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath('parse-diagnostic.png') });
+      await summary.click();
+      await expect(error.locator('pre')).not.toBeVisible();
+    });
+  }
+}
+
+for (const device of ['desktop', 'phone'] as const) {
+  test(`library failure chain ${device}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: device === 'phone' ? 375 : 1280, height: 800 });
+    await installTauriMock(page, 'light', true, true);
+    await page.addInitScript(({ phone }) => {
+      if (phone) Object.defineProperty(navigator, 'userAgent', { value: 'Mozilla/5.0 (Linux; Android 12) Mobile' });
+      const target = window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: unknown) => Promise<unknown> } };
+      const invoke = target.__TAURI_INTERNALS__.invoke;
+      target.__TAURI_INTERNALS__.invoke = async (cmd, args) => {
+        if (cmd === 'account_library_list' || cmd === 'parse_create_source') throw { code: 'bilibili_api_error', message: '加载失败', detail: 'HTTP 429; token=secret-value' };
+        return invoke(cmd, args);
+      };
+    }, { phone: device === 'phone' });
+    await page.goto('/');
+    await page.getByRole('button', { name: device === 'phone' ? '内容库' : '内容库 收藏与订阅', exact: true }).click();
+    for (const category of ['我的收藏', '订阅合集', '稍后再看']) {
+      await page.getByRole('tab', { name: new RegExp(category) }).click();
+      const details = page.locator('.error-details');
+      await expect(details.getByRole('button', { name: '复制诊断信息' })).toBeVisible();
+      await details.locator('summary').click();
+      await expect(details.locator('pre')).toBeVisible();
+      await expect(details.locator('pre')).toContainText('HTTP 429');
+      await expect(details.locator('pre')).not.toContainText('secret-value');
+    }
+    await page.screenshot({ path: testInfo.outputPath('library-error.png') });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  });
+}
+
+test('pagination and background keep real causes from transport to controls', async ({ page }) => {
+  await installTauriMock(page, 'light');
+  await page.addInitScript(() => {
+    const target = window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: unknown) => Promise<unknown> }; attempts?: number };
+    const invoke = target.__TAURI_INTERNALS__.invoke;
+    target.attempts = 0;
+    target.__TAURI_INTERNALS__.invoke = async (cmd, args) => {
+      if (cmd === 'selection_create_tasks') target.attempts!++;
+      if (cmd === 'parse_load_more' || cmd === 'selection_create_tasks') throw { code: 'bilibili_api_error', message: '操作失败', detail: 'HTTP 429: retry later; SESSDATA=hidden-cookie' };
+      return invoke(cmd, args);
+    };
+  });
+  await page.goto('/');
+  await page.getByLabel('链接或 BV / AV').fill('favorite:fixture');
+  await page.getByRole('button', { name: '开始解析' }).click();
+  await page.getByRole('button', { name: '解析', exact: true }).click();
+  await expect(page.locator('.error-details')).toBeVisible();
+  await page.locator('.error-details summary').click();
+  await expect(page.locator('.error-details pre')).toContainText('HTTP 429');
+  await page.getByRole('button', { name: '更多解析方式' }).click();
+  await page.getByRole('menuitem', { name: '后台解析全部并下载' }).click();
+  const status = page.getByRole('region', { name: '后台解析下载' });
+  await expect(status).toContainText('后台解析下载失败');
+  await status.locator('summary').click();
+  await expect(status.locator('pre')).toContainText('HTTP 429');
+  await expect(status.locator('pre')).not.toContainText('hidden-cookie');
+  expect(await page.evaluate(() => (window as unknown as { attempts: number }).attempts)).toBe(1);
+});
+
+test('recent failure report survives page changes and can be cleared', async ({ page }, testInfo) => {
+  await installTauriMock(page, 'light');
+  await page.addInitScript(() => {
+    const target = window as unknown as { exportedErrors?: string; __TAURI_INTERNALS__: { invoke: (cmd: string, args?: unknown) => Promise<unknown> } };
+    const invoke = target.__TAURI_INTERNALS__.invoke;
+    target.__TAURI_INTERNALS__.invoke = async (cmd, args) => {
+      if (cmd === 'diagnostics_export') { target.exportedErrors = (args as { recentErrors: string }).recentErrors; return { path: 'fixture-diagnostics.json' }; }
+      if (cmd === 'parse_create_source') throw { code: 'bilibili_api_error', message: '失败', detail: 'API diagnostic sentinel; token=do-not-copy' };
+      return invoke(cmd, args);
+    };
+  });
+  await page.goto('/');
+  await page.getByLabel('链接或 BV / AV').fill('BV1xx411c7mD');
+  await page.getByRole('button', { name: '开始解析' }).click();
+  await expect(page.locator('.error-details')).toBeVisible();
+  await page.getByRole('button', { name: '设置 偏好与维护' }).click();
+  await page.getByRole('button', { name: /网络与维护/ }).click();
+  await page.getByText('最近的操作错误', { exact: true }).click();
+  await page.locator('.error-details summary').click();
+  await expect(page.locator('.error-details pre')).toContainText('API diagnostic sentinel');
+  await expect(page.locator('.error-details pre')).not.toContainText('do-not-copy');
+  await page.getByRole('button', { name: '导出诊断', exact: true }).click();
+  const exported = await page.evaluate(() => (window as unknown as { exportedErrors: string }).exportedErrors);
+  expect(exported).toContain('API diagnostic sentinel');
+  expect(exported).not.toContain('do-not-copy');
+  await page.screenshot({ path: testInfo.outputPath('recent-errors.png') });
+  await page.getByRole('button', { name: '清空错误记录' }).click();
+  await expect(page.getByText('最近的操作错误', { exact: true })).toHaveCount(0);
+});
+
+test('size estimation failure is inspectable without disabling download', async ({ page }) => {
+  await installTauriMock(page, 'light');
+  await page.addInitScript(() => {
+    const target = window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: unknown) => Promise<unknown> } };
+    const invoke = target.__TAURI_INTERNALS__.invoke;
+    target.__TAURI_INTERNALS__.invoke = async (cmd, args) => {
+      if (cmd === 'selection_estimate_size') throw { code: 'bilibili_api_error', message: '解析失败', detail: 'estimate-cause-sentinel' };
+      return invoke(cmd, args);
+    };
+  });
+  await page.goto('/');
+  await page.getByLabel('链接或 BV / AV').fill('BV1xx411c7mD');
+  await page.getByRole('button', { name: '开始解析' }).click();
+  await page.getByRole('button', { name: '选择 测试视频' }).click();
+  await page.getByRole('button', { name: '下载所选 (1)' }).click();
+  const dialog = page.getByRole('dialog', { name: '下载设置' });
+  await expect(dialog.getByRole('button', { name: '复制诊断信息' })).toBeVisible();
+  await dialog.locator('.error-details summary').click();
+  await expect(dialog.locator('pre')).toContainText('estimate-cause-sentinel');
+  await expect(dialog.getByRole('button', { name: '开始下载' })).toBeEnabled();
+});

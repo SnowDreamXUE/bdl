@@ -1,10 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
-import { accountLibraryList, parseCreateSource, queueResume } from './tauri'
+import { accountLibraryList, parseCreateSource, queueResume, diagnosticsExport } from './tauri'
+import { clearRecentFailures, recentFailureReport } from '../utils/recentFailures'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
 
 describe('user-facing BPI failures', () => {
+  it('keeps bounded redacted failures at the command boundary without request secrets', async () => {
+    clearRecentFailures()
+    vi.mocked(invoke).mockRejectedValue({ code: 'bilibili_api_error', message: '失败', detail: 'HTTP 429; SESSDATA=private-cookie' })
+    for (let index = 0; index < 21; index++) {
+      await parseCreateSource({ input: `private-input-${index}` }).catch(() => undefined)
+    }
+    expect(recentFailureReport.value.match(/操作: parse_create_source/g)).toHaveLength(20)
+    expect(recentFailureReport.value).toContain('HTTP 429')
+    expect(recentFailureReport.value).not.toContain('private-cookie')
+    expect(recentFailureReport.value).not.toContain('private-input')
+    clearRecentFailures()
+    expect(recentFailureReport.value).toBe('')
+  })
   beforeEach(() => vi.resetAllMocks())
   const raw = 'bpi error: failed to decode response (Data) at line 1 column 15164'
   it.each([
@@ -24,6 +38,21 @@ describe('user-facing BPI failures', () => {
     vi.mocked(invoke).mockRejectedValue({ code, message: '后端通用提示' })
     await expect(parseCreateSource({ input: 'fixture' })).rejects.toThrow('解析失败')
     await expect(accountLibraryList({ kind: 'created_favorite', page: 1, page_size: 20 })).rejects.toThrow('收藏夹加载失败')
+  })
+  it('preserves structured causes even when a legacy error omits code', async () => {
+    vi.mocked(invoke).mockRejectedValue({ message: '连接中断', detail: 'socket reset by peer' })
+    await expect(parseCreateSource({ input: 'fixture' })).rejects.toMatchObject({ message: '连接中断', detail: 'socket reset by peer' })
+  })
+  it('includes failures before task creation in exported diagnostics', async () => {
+    clearRecentFailures()
+    vi.mocked(invoke).mockRejectedValueOnce({ code: 'bilibili_api_error', message: '操作失败', detail: 'HTTP 412; token=hidden-export-token' })
+    await parseCreateSource({ input: 'fixture' }).catch(() => undefined)
+    vi.mocked(invoke).mockResolvedValueOnce({ path: 'diagnostics.json' })
+    await diagnosticsExport()
+    const args = vi.mocked(invoke).mock.calls.at(-1)?.[1] as { recentErrors: string }
+    expect(args.recentErrors).toContain('HTTP 412')
+    expect(args.recentErrors).not.toContain('hidden-export-token')
+    clearRecentFailures()
   })
   it('preserves actionable login errors', async () => {
     vi.mocked(invoke).mockRejectedValue({ code: 'login_required', message: '登录状态可能已失效，请重新登录后重试。' })

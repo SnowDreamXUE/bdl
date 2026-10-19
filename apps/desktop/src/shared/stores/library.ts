@@ -1,3 +1,4 @@
+import { commandDiagnostic } from '../utils/commandDiagnostic'
 import { defineStore } from 'pinia'
 
 import type { LibraryCategory, LibraryBrowsePage, LibraryBrowseItem } from '../api/dto'
@@ -10,6 +11,7 @@ interface LibraryState {
   pages: Record<LibraryCategory, LibraryBrowsePage | null>
   watchLaterItems: LibraryBrowseItem[] | null
   loading: boolean
+  errorDetail: string | null
   error: string | null
   requestGeneration: number
 }
@@ -25,6 +27,7 @@ export const useLibraryStore = defineStore('library', {
     loading: false,
     watchLaterItems: null,
     error: null,
+    errorDetail: null,
     requestGeneration: 0,
   }),
   getters: {
@@ -37,6 +40,7 @@ export const useLibraryStore = defineStore('library', {
       if (kind === this.activeKind) return
       this.activeKind = kind
       this.error = null
+      this.errorDetail = null
       await this.load(kind, 1)
     },
     async load(kind?: LibraryCategory, page = 1) {
@@ -45,6 +49,7 @@ export const useLibraryStore = defineStore('library', {
       this.requestGeneration = generation
       this.loading = true
       this.error = null
+      this.errorDetail = null
       const startedAt = Date.now()
       try {
         let result: LibraryBrowsePage
@@ -76,6 +81,7 @@ export const useLibraryStore = defineStore('library', {
       } catch (error) {
         if (generation === this.requestGeneration) {
           this.error = error instanceof Error ? error.message : String(error)
+          this.errorDetail = commandDiagnostic(error, `操作: 加载内容库\n分类: ${targetKind}\n页码: ${page}`)
         }
       } finally {
         // Keep fast refreshes from flashing a skeleton for only one frame.
@@ -94,6 +100,7 @@ export const useLibraryStore = defineStore('library', {
       this.watchLaterItems = null
       this.loading = false
       this.error = null
+      this.errorDetail = null
     },
   },
 })

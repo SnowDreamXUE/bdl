@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { recordCommandFailure, recentFailureReport } from '../utils/recentFailures'
 
 import type {
   AccountSummary,
@@ -273,7 +274,7 @@ export const maintenanceCleanupCache = () => invokeCommand<MaintenanceResult>('m
 
 export const maintenanceCleanupTemp = (token: string) => invokeCommand<MaintenanceResult>('maintenance_cleanup_temp', { token })
 
-export const diagnosticsExport = () => invokeCommand<DiagnosticsExportResponse>('diagnostics_export')
+export const diagnosticsExport = () => invokeCommand<DiagnosticsExportResponse>('diagnostics_export', { recentErrors: recentFailureReport.value || null })
 export const diagnosticsEnvironment = () => invokeCommand<DiagnosticEnvironment>('diagnostics_environment')
 
 export const openExternalUrl = (url: string) => invokeCommand<void>('open_external_url', { url })
@@ -282,14 +283,17 @@ const invokeCommand = async <T>(command: string, args?: Record<string, unknown>)
   try {
     return await invoke<T>(command, args)
   } catch (error) {
-    throw normalizeCommandError(error, command)
+    const normalized = normalizeCommandError(error, command)
+    recordCommandFailure(command, normalized)
+    throw normalized
   }
 }
 
 const normalizeCommandError = (error: unknown, command: string): BdlCommandError => {
+  const value = error && typeof error === 'object' ? error as Record<string, unknown> : {}
   const normalized = isCommandErrorShape(error)
     ? error
-    : { code: 'frontend_error', message: error instanceof Error ? error.message : String(error) }
+    : { code: 'frontend_error', message: typeof value.message === 'string' ? value.message : String(error), detail: typeof value.detail === 'string' ? value.detail : undefined }
   const internalBpiError = ['bilibili_response_decode_failed', 'bilibili_api_error'].includes(normalized.code)
     || /bpi error:|failed to decode response/i.test(normalized.message)
   if (internalBpiError) {

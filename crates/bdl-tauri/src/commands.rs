@@ -74,7 +74,7 @@ impl From<BdlError> for CommandError {
             &command_error_message(&error).unwrap_or_else(|| raw.clone()),
         );
         let detail = (raw != message).then_some(raw);
-        tracing::warn!(code, detail = ?detail, "BDL operation failed");
+        tracing::warn!(code, message, detail = ?detail, "BDL operation failed");
         Self {
             code,
             message,
@@ -1495,6 +1495,7 @@ pub async fn diagnostics_environment(
 #[tauri::command]
 pub async fn diagnostics_export(
     state: State<'_, AppState>,
+    recent_errors: Option<String>,
 ) -> CommandResult<DiagnosticsExportResponse> {
     let diagnostics_dir = state.data_dir().join("diagnostics");
     fs::create_dir_all(&diagnostics_dir)
@@ -1541,6 +1542,7 @@ pub async fn diagnostics_export(
         "settings": settings_json,
         "tasks": redacted_tasks,
         "task_logs": task_logs,
+        "recent_operation_errors": recent_errors.map(|report| bdl_core::account::redact_diagnostic(&report)),
     });
     let file_name = format!(
         "bdl-diagnostics-{}.json",

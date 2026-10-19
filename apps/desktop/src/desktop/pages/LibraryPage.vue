@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ErrorDetails from "../../shared/ui/ErrorDetails.vue";
 import { coverUrl } from "../../shared/utils/coverUrl";
 import UiButton from '../../shared/ui/Button.vue'
 import UiEmptyState from '../../shared/ui/EmptyState.vue'
@@ -42,16 +43,18 @@ const { account, library, ui, query, failedCoverIds, detailFolder, detailLoading
           <template #action><UiButton @click="ui.openLoginDialog()">登录账号</UiButton></template>
         </UiEmptyState>
 
-        <UiEmptyState
-          v-else-if="library.error"
-          title="暂时无法读取内容库"
-          :description="library.error"
-          icon="i-tabler-cloud-off"
-          tone="warning"
-          role="alert"
-        >
-          <template #action><UiButton variant="secondary" @click="load()">重新加载</UiButton></template>
-        </UiEmptyState>
+        <div v-else-if="library.error" class="grid min-w-0 gap-3">
+          <UiEmptyState
+            title="暂时无法读取内容库"
+            :description="library.error"
+            icon="i-tabler-cloud-off"
+            tone="warning"
+            role="alert"
+          >
+            <template #action><UiButton variant="secondary" @click="load()">重新加载</UiButton></template>
+          </UiEmptyState>
+          <ErrorDetails v-if="library.errorDetail" :detail="library.errorDetail" />
+        </div>
 
         <div v-else-if="library.loading" class="library-grid" role="status" aria-label="正在加载内容">
           <div v-for="index in 6" :key="index" class="library-card skeleton" aria-hidden="true">

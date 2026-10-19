@@ -1,3 +1,4 @@
+import { commandDiagnostic } from '../../utils/commandDiagnostic';
 import { useClipboardStore } from '../../stores/clipboard';
 import type { WorkflowStep } from '../../ui/WorkflowSteps.vue';
 import { computed, onActivated, onDeactivated, onMounted, ref, useTemplateRef, watch } from 'vue';
@@ -80,7 +81,7 @@ export function useParsePage() {
         parse.clearNotice();
       }
     } catch (error) {
-      parse.setNotice(`读取剪贴板失败：${error instanceof Error ? error.message : String(error)}`, 'danger');
+      parse.setNotice(`读取剪贴板失败：${error instanceof Error ? error.message : String(error)}`, 'danger', undefined, commandDiagnostic(error, '操作: 读取剪贴板'));
     }
   };
   const openDownloadSettings = () => {

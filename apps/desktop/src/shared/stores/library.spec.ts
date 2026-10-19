@@ -28,6 +28,18 @@ describe('library store', () => {
     parseCloseSource.mockReset()
   })
 
+  it.each(['created_favorite', 'collected_favorite', 'watch_later'] as const)('retains %s failure details and clears them on logout', async (kind) => {
+    const error = Object.assign(new Error('加载失败'), { code: 'bilibili_api_error', detail: 'HTTP 412; SESSDATA=private-cookie' })
+    accountLibraryList.mockRejectedValue(error)
+    parseCreateSource.mockRejectedValue(error)
+    const library = useLibraryStore()
+    await library.load(kind)
+    expect(library.errorDetail).toContain('HTTP 412')
+    expect(library.errorDetail).not.toContain('private-cookie')
+    library.clear()
+    expect(library.errorDetail).toBeNull()
+  })
+
   it('loads and caches the selected account folder category', async () => {
     accountLibraryList.mockResolvedValue(fixturePage)
     const library = useLibraryStore()

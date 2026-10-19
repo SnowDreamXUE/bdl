@@ -29,7 +29,7 @@ const {
 
   pacedStopping,
   activeLoading,
-  activeError,
+  activeError, activeErrorDetail,
   hasMore,
   allRowsSelected,
   canCreateTasks,
@@ -131,7 +131,7 @@ const visibleRows = computed(() => {
       embedded
     />
     <UiButton v-if="hasCollectionSections(activeSource) && hasMore" variant="secondary" :disabled="activeLoading" @click="loadMore">继续加载内容</UiButton>
-    <UiInlineNotice v-if="activeError" tone="danger">{{ activeError }}</UiInlineNotice>
+    <UiInlineNotice v-if="activeError" tone="danger" :detail="activeErrorDetail ?? undefined">{{ activeError }}</UiInlineNotice>
     <footer class="mobile-download-footer mobile-download-bar">
       <UiCheckbox
         v-if="managing"
