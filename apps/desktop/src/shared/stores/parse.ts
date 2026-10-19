@@ -20,6 +20,7 @@ import {
   parseCancel,
   selectionCreateTasks,
   selectionEstimateSize,
+  selectionPrepare,
 } from '../api/tauri'
 import { useQueueStore } from './queue'
 import { useSettingsStore } from './settings'
@@ -46,6 +47,7 @@ interface BackgroundParseJob {
 }
 
 interface ParseState {
+  preparationBySource: Record<string, { total: number; processed: number; failures: Array<{ itemId: string; title: string; message: string; partIds: string[] }> }>
   createGeneration: number
   backgroundJob: BackgroundParseJob | null
   input: string
@@ -133,6 +135,7 @@ export type PacedParsingResult = 'completed' | 'stopped' | 'failed'
 export const useParseStore = defineStore('parse', {
   state: (): ParseState => ({
     createGeneration: 0,
+    preparationBySource: {},
     backgroundJob: null,
     input: '',
     sources: {},
@@ -354,6 +357,55 @@ export const useParseStore = defineStore('parse', {
         this.loadingBySource[sourceId] = false
       }
     },
+    async prepareLoadedVideos(sourceId: string, mode: 'selected' | 'next' | 'all' | 'retry', batchSize = 50) {
+      const source = this.sources[sourceId]
+      if (!source || this.loadingBySource[sourceId] || this.pacedParsingBySource[sourceId]) return
+      const selected = new Set(this.selectionBySource[sourceId] ?? [])
+      const failures = this.preparationBySource[sourceId]?.failures ?? []
+      const failedItems = new Set(failures.map(failure => failure.itemId))
+      const ready = (part: NormalizedPart) => part.cid != null && part.streams.length > 0
+      let targets = source.groups.flatMap(group => group.items).flatMap(item => {
+        const retry = failures.find(failure => failure.itemId === item.id)
+        if (mode === 'retry') return retry ? [retry] : []
+        if (mode !== 'selected' && failedItems.has(item.id)) return []
+        const parts = item.parts.filter(part => !ready(part) && (mode !== 'selected' || selected.has(part.id)))
+        return parts.length ? [{ itemId: item.id, title: item.title, partIds: parts.map(part => part.id), message: '' }] : []
+      })
+      if (mode === 'next') targets = targets.slice(0, Math.max(1, Math.floor(batchSize)))
+      if (!targets.length) return
+      const generation = this.createGeneration
+      const job = { total: targets.length, processed: 0, failures: [...failures] }
+      this.preparationBySource[sourceId] = job
+      const progress = this.preparationBySource[sourceId]!
+      this.pacedParsingBySource[sourceId] = true
+      this.pacedParsingStopRequestedBySource[sourceId] = false
+      this.errorsBySource[sourceId] = null
+      const stopped = () => generation !== this.createGeneration || !this.sources[sourceId] || this.pacedParsingStopRequestedBySource[sourceId]
+      try {
+        for (const target of targets) {
+          if (stopped()) break
+          try {
+            const tree = await selectionPrepare(sourceId, target.partIds)
+            if (generation !== this.createGeneration || !this.sources[sourceId]) break
+            this.upsertSource(tree)
+            progress.failures = progress.failures.filter(failure => failure.itemId !== target.itemId)
+          } catch (error) {
+            if (stopped()) break
+            const message = errorMessage(error)
+            progress.failures = progress.failures.filter(failure => failure.itemId !== target.itemId)
+            progress.failures.push({ ...target, message })
+            if (shouldStopBackgroundParsing(message)) {
+              this.errorsBySource[sourceId] = message
+              progress.processed++
+              break
+            }
+          }
+          progress.processed++
+        }
+      } finally {
+        if (generation === this.createGeneration && this.sources[sourceId]) this.pacedParsingBySource[sourceId] = false
+      }
+    },
     async startBackgroundDownload(sourceId: string, retryFailed = false): Promise<void> {
       if (this.backgroundJob?.status === 'running' || this.pacedParsingBySource[sourceId] || this.loadingBySource[sourceId]) return
       const source = this.sources[sourceId]
@@ -495,6 +547,7 @@ export const useParseStore = defineStore('parse', {
       this.input = ''
       this.clearNotice()
       this.sources = {}
+      this.preparationBySource = {}
       this.backgroundJob = null
       this.sourceOrder = []
       this.activeSourceId = null
@@ -517,6 +570,7 @@ export const useParseStore = defineStore('parse', {
       } finally {
         if (this.backgroundJob?.sourceId === sourceId) this.backgroundJob = null
         delete this.sources[sourceId]
+        delete this.preparationBySource[sourceId]
         delete this.selectionBySource[sourceId]
         delete this.errorsBySource[sourceId]
         delete this.pacedParsingBySource[sourceId]
@@ -539,6 +593,9 @@ export const useParseStore = defineStore('parse', {
       }
 
       const partIds = partIdsForNode(tree, nodeId)
+      this.togglePartIds(sourceId, partIds)
+    },
+    togglePartIds(sourceId: string, partIds: string[]) {
       if (partIds.length === 0) {
         return
       }
@@ -756,6 +813,20 @@ export const useParseStore = defineStore('parse', {
     },
     upsertSource(tree: NormalizedSourceTree) {
       const sourceId = tree.source.id
+      const previous = this.sources[sourceId]
+      const selection = this.selectionBySource[sourceId]
+      if (previous && selection) {
+        const currentIds = new Set(collectPartIds(tree))
+        const items = new Map(tree.groups.flatMap(group => group.items.map(item => [item.id, item] as const)))
+        const oldParts = new Map(previous.groups.flatMap(group => group.items.flatMap(item => item.parts.map(part => [part.id, { item, part }] as const))))
+        this.selectionBySource[sourceId] = uniquePartIds(selection.flatMap(id => {
+          if (currentIds.has(id)) return [id]
+          const old = oldParts.get(id)
+          // Only whole-video placeholders expand; explicit P selections stay scoped.
+          if (old && old.part.cid == null) return items.get(old.item.id)?.parts.map(part => part.id) ?? [id]
+          return [id]
+        }))
+      }
       this.sources[sourceId] = tree
       if (!this.sourceOrder.includes(sourceId)) {
         this.sourceOrder.unshift(sourceId)

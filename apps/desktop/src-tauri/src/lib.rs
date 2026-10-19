@@ -84,6 +84,7 @@ pub fn run() {
             bdl_tauri::commands::parse_refresh_source,
             bdl_tauri::commands::selection_create_tasks,
             bdl_tauri::commands::selection_estimate_size,
+            bdl_tauri::commands::selection_prepare,
             bdl_tauri::commands::mobile_pick_export_directory,
             bdl_tauri::commands::mobile_read_clipboard_text,
             bdl_tauri::commands::mobile_save_image_to_gallery,
@@ -136,6 +137,15 @@ pub fn run() {
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let builder = builder
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::SIZE
+                        | tauri_plugin_window_state::StateFlags::MAXIMIZED,
+                )
+                .build(),
+        )
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build());

@@ -23,7 +23,13 @@ const sources = [
         v-if="update.source === 'mirror'" label="自定义加速地址" :model-value="update.customMirror"
         placeholder="https://你的加速站/" helper="留空使用软件站提供的加速源。也支持 {url}（完整链接）或 {path}（不含 https:// 的链接）模板。"
         :disabled="update.checking || update.installing" @update:model-value="value => update.setSource('mirror', value)" />
-      <p v-if="update.source === 'quark'" class="m-0 text-xs leading-5 text-(--color-muted)">打开夸克目录后，按版本与系统选择安装包，下载后手动安装。</p>
+      <div v-if="update.source === 'quark'" class="grid justify-items-start gap-3">
+        <p class="m-0 text-xs leading-5 text-(--color-muted)">打开夸克目录后，按版本与系统选择安装包，下载后手动安装。</p>
+        <UiButton variant="secondary" :disabled="update.openingQuark" @click="update.openQuark">
+          {{ update.openingQuark ? '正在打开…' : '打开夸克网盘' }}
+        </UiButton>
+        <UiInlineNotice v-if="update.quarkError" tone="danger">{{ update.quarkError }}</UiInlineNotice>
+      </div>
     </SettingsCard>
     <SettingsCard aria-label="自动检测">
       <div class="settings-update-heading">

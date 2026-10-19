@@ -163,6 +163,9 @@ export const selectionCreateTasks = (request: SelectionCreateTasksRequest) =>
 export const selectionEstimateSize = (request: SelectionEstimateSizeRequest) =>
   invokeCommand<SelectionSizeEstimate>('selection_estimate_size', { request })
 
+export const selectionPrepare = (sourceId: string, partIds: string[]) =>
+  invokeCommand<NormalizedSourceTree>('selection_prepare', { sourceId, partIds })
+
 export const mobilePickExportDirectory = () =>
   invokeCommand<DocumentTreeDirectory>('mobile_pick_export_directory')
 

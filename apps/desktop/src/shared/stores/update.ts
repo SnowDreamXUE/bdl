@@ -22,6 +22,8 @@ export const useUpdateStore = defineStore('update', {
     currentVersion: '0.1.0',
     autoCheck: false,
     checking: false,
+    openingQuark: false,
+    quarkError: null as string | null,
     checked: false,
     installing: false,
     progress: 0,
@@ -34,6 +36,21 @@ export const useUpdateStore = defineStore('update', {
     hasUpdate: (state) => Boolean(state.update || state.androidDownloadUrl || state.manualDownloadUrl),
   },
   actions: {
+    async openQuark() {
+      if (this.openingQuark) return
+      this.openingQuark = true
+      this.quarkError = null
+      try {
+        const site = await distributionUpdate()
+        const url = site.sources.find(s => s.kind === 'cloud_drive' && s.delivery.url?.startsWith('https://pan.quark.cn/'))?.delivery.url
+        if (!url) throw new Error('当前平台尚未提供夸克下载，请选择其他来源。')
+        await openExternalUrl(url)
+      } catch (error) {
+        this.quarkError = error instanceof Error ? error.message : String(error)
+      } finally {
+        this.openingQuark = false
+      }
+    },
     setSource(source: 'github' | 'mirror' | 'quark', customMirror?: string) {
       if (this.checking || this.installing) return
       this.source = source

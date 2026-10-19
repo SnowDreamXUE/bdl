@@ -110,6 +110,13 @@ fn normalized_source_tree_serializes_stable_shape() {
                             "publish_date": "2026-07-08",
                             "cover_url": null,
                             "duration_seconds": null,
+                            "nfo_metadata": {
+                                "title": "", "part_title": "", "description": "", "genre": "",
+                                "uploader": "", "publish_date": "", "date": "", "duration_seconds": null,
+                                "source_url": "", "source_title": "", "bvid": "", "aid": null,
+                                "cid": null, "owner_mid": null, "quality": "", "codec": "",
+                                "index": 0, "part_index": 0
+                            },
                             "parts": [
                                 {
                                     "id": "part_1",

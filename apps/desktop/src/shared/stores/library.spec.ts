@@ -4,11 +4,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AccountLibraryPage } from '../api/dto'
 import { useLibraryStore } from './library'
 
-const { accountLibraryList } = vi.hoisted(() => ({
+const { accountLibraryList, parseCreateSource, parseCloseSource } = vi.hoisted(() => ({
   accountLibraryList: vi.fn(),
+  parseCreateSource: vi.fn(),
+  parseCloseSource: vi.fn(),
 }))
 
-vi.mock('../api/tauri', () => ({ accountLibraryList }))
+vi.mock('../api/tauri', () => ({ accountLibraryList, parseCreateSource, parseCloseSource }))
 
 const fixturePage: AccountLibraryPage = {
   items: [],
@@ -22,6 +24,8 @@ describe('library store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     accountLibraryList.mockReset()
+    parseCreateSource.mockReset()
+    parseCloseSource.mockReset()
   })
 
   it('loads and caches the selected account folder category', async () => {
@@ -37,6 +41,36 @@ describe('library store', () => {
     })
     expect(library.activePage?.total).toBe(33)
     expect(library.error).toBeNull()
+  })
+
+  it('browses a large watch-later list without parsing each video, and clears account data', async () => {
+    parseCreateSource.mockResolvedValue({ source: { id: 'watch:1' }, groups: [{ items: Array.from({ length: 1000 }, (_, i) => ({ id: `item:${i}`, title: `视频 ${i}`, owner_name: 'UP', owner_mid: 1, cover_url: null, parts: [{ aid: i + 1, bvid: null }] })) }] })
+    const library = useLibraryStore()
+    await library.selectKind('watch_later')
+    expect(library.activePage?.items).toHaveLength(20)
+    expect(library.activePage?.total).toBe(1000)
+    expect(library.activePage?.items[0]?.source_url).toBe('https://www.bilibili.com/video/av1')
+    await library.load('watch_later', 50)
+    expect(library.activePage?.items[0]?.title).toBe('视频 980')
+    expect(parseCreateSource).toHaveBeenCalledTimes(1)
+    expect(parseCloseSource).toHaveBeenCalledWith('watch:1')
+    expect(accountLibraryList).not.toHaveBeenCalled()
+    library.clear()
+    expect(library.pages.watch_later).toBeNull()
+    expect(library.watchLaterItems).toBeNull()
+  })
+
+  it('ignores watch-later responses arriving after account clear and releases their source', async () => {
+    let resolve: (value: unknown) => void = () => undefined
+    parseCreateSource.mockReturnValue(new Promise(done => { resolve = done }))
+    const library = useLibraryStore()
+    const loading = library.selectKind('watch_later')
+    library.clear()
+    resolve({ source: { id: 'watch:old' }, groups: [] })
+    await loading
+    expect(library.pages.watch_later).toBeNull()
+    expect(library.watchLaterItems).toBeNull()
+    expect(parseCloseSource).toHaveBeenCalledWith('watch:old')
   })
 
   it('keeps an actionable error when account content cannot load', async () => {
@@ -77,6 +111,7 @@ describe('library store', () => {
 
     const collectedRequest = library.selectKind('collected_favorite')
     await Promise.resolve()
+    accountLibraryList.mockResolvedValueOnce(fixturePage)
     await library.selectKind('created_favorite')
     rejectCollected(new Error('订阅接口暂时不可用'))
     await collectedRequest
@@ -85,5 +120,6 @@ describe('library store', () => {
     expect(library.activePage?.total).toBe(33)
     expect(library.error).toBeNull()
     expect(library.loading).toBe(false)
+    expect(accountLibraryList).toHaveBeenCalledTimes(2)
   })
 })

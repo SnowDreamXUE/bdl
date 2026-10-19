@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import ClipboardPreference from "../../shared/ui/ClipboardPreference.vue";
 import UiButton from '../../shared/ui/Button.vue';
 import UiInlineNotice from '../../shared/ui/InlineNotice.vue';
 
@@ -35,8 +34,7 @@ const {
         <UiButton class="parse-paste" variant="ghost" :disabled="createLoading" @click="pasteInput"
           ><UIcon name="i-tabler-clipboard" />粘贴</UiButton
         >
-        <ClipboardPreference />
-            <label class="parse-behavior"
+        <label class="parse-behavior"
           ><span>解析范围</span
           ><select
             aria-label="解析范围"

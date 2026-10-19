@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import CollectionTree from '../../../shared/ui/CollectionTree.vue';
+import { hasCollectionSections } from '../../../shared/features/parse/collectionTree';
 import UiButton from '../../../shared/ui/Button.vue';
 import UiEmptyState from '../../../shared/ui/EmptyState.vue';
 import UiInlineNotice from '../../../shared/ui/InlineNotice.vue';
@@ -11,6 +13,7 @@ import { useParseResultWorkspace } from '../../../shared/features/parse/useParse
 const { embedded = false } = defineProps<{ embedded?: boolean }>();
 const emit = defineEmits<{ download: [] }>();
 const {
+  parse,
   loadBatchSize,
   activeSource,
   selectedIds,
@@ -57,7 +60,7 @@ const {
           <UIcon name="i-tabler-arrow-left" class="size-4" aria-hidden="true" />
         </button>
         <div class="flex min-w-0 items-center gap-2">
-          <strong class="source-title truncate text-base text-(--color-text)" :title="activeSource.source.title">
+          <strong class="source-title truncate text-sm text-(--color-text)" :title="activeSource.source.title">
             {{ activeSource.source.title }}
           </strong>
 
@@ -93,8 +96,15 @@ const {
       </div>
     </div>
 
+    <CollectionTree
+      v-if="hasCollectionSections(activeSource)"
+      :source="activeSource"
+      :selected-ids="selectedIds"
+      :disabled="activeLoading"
+      @toggle="parse.togglePartIds(activeSource.source.id, $event)"
+    />
     <SourceMediaList
-      v-if="tableRows.length"
+      v-else-if="tableRows.length"
       class="min-h-0 flex-1"
       :rows="tableRows"
       :source="activeSource"

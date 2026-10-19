@@ -2785,6 +2785,34 @@ mod tests {
     }
 
     #[test]
+    fn watch_later_estimate_then_download_accepts_original_selection() {
+        let mut tree = uploader_tree();
+        tree.source.kind = SourceKind::WatchLater;
+        let placeholder = PartId("part:watch_later:170001".into());
+        tree.groups[0].items[0].id = ItemId("item:watch_later:170001".into());
+        tree.groups[0].items[0].parts[0].id = placeholder.clone();
+        let mut hydrated = video_tree();
+        for part in &mut hydrated.groups[0].items[0].parts {
+            part.streams = vec![
+                media_stream(MediaKind::Video, "https://cdn.example/video.m4s"),
+                media_stream(MediaKind::Audio, "https://cdn.example/audio.m4s"),
+            ];
+        }
+        // Size estimation hydrates the cached source before the download request.
+        let hydrated_ids =
+            hydrate_placeholder_part(&mut tree, &placeholder, None, hydrated).unwrap();
+        let selected = normalize_selected_part_ids(&tree, &[placeholder]);
+        let tasks = bdl_core::planner::plan_selected_parts(
+            &tree,
+            &selected,
+            &bdl_core::planner::DownloadOptions::new(PathBuf::from("downloads")),
+        )
+        .expect("download after estimate must use the hydrated parts");
+        assert_eq!(selected, hydrated_ids);
+        assert_eq!(tasks.len(), 2);
+    }
+
+    #[test]
     fn hydrate_known_part_preserves_streams_for_previously_hydrated_parts() {
         let mut tree = video_tree();
         tree.groups[0].items[0].parts[0].streams = vec![media_stream(

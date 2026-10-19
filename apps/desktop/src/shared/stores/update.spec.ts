@@ -153,6 +153,35 @@ describe('update preferences', () => {
     expect(update.manualDownloadUrl).toContain('github.com')
     expect(update.update).toBeNull()
   })
+  it('opens Quark without checking or requiring a newer version, on desktop and Android', async () => {
+    vi.mocked(distributionUpdate).mockResolvedValue(site)
+    const update = useUpdateStore()
+    update.currentVersion = '99.0.0'
+    for (const android of [false, true]) {
+      update.android = android
+      await update.openQuark()
+      expect(update.quarkError).toBeNull()
+      expect(update.hasUpdate).toBe(false)
+      expect(update.checked).toBe(false)
+    }
+    expect(openExternalUrl).toHaveBeenCalledTimes(2)
+    expect(openExternalUrl).toHaveBeenCalledWith('https://pan.quark.cn/s/test')
+    expect(check).not.toHaveBeenCalled()
+  })
+  it('reports unavailable Quark sources and allows retry after failure', async () => {
+    const update = useUpdateStore()
+    await update.openQuark()
+    expect(update.quarkError).toBe('site offline')
+    expect(update.openingQuark).toBe(false)
+    vi.mocked(distributionUpdate).mockResolvedValue({ ...site, sources: [] })
+    await update.openQuark()
+    expect(update.quarkError).toContain('尚未提供夸克下载')
+    expect(openExternalUrl).not.toHaveBeenCalled()
+    vi.mocked(distributionUpdate).mockResolvedValue(site)
+    await update.openQuark()
+    expect(update.quarkError).toBeNull()
+    expect(openExternalUrl).toHaveBeenCalledOnce()
+  })
   it('does not report latest after a silent failure or retain stale update', async () => {
     const update = useUpdateStore()
     update.androidDownloadUrl = 'https://old.test/apk'

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import CollectionTree from '../../../shared/ui/CollectionTree.vue';
+import { hasCollectionSections } from '../../../shared/features/parse/collectionTree';
 import ParseResultListMobile from '../parse/ParseResultListMobile.vue';
 import MobilePagination from '../MobilePagination.vue';
 import UiButton from '../../../shared/ui/Button.vue';
@@ -65,7 +67,7 @@ const visibleItems = computed(() => {
       </button>
       <div class="mobile-detail-copy">
         <h2 :title="folder.title">{{ folder.title }}</h2>
-        <p>{{ totalCount }} 个视频 · 已加载 {{ source?.source.loaded_count ?? items.length }}</p>
+        <p>{{ totalCount }} {{ source?.source.kind === 'video' ? '个分 P' : '个视频' }} · 已加载 {{ source?.source.kind === 'video' ? items.length : source?.source.loaded_count ?? items.length }}</p>
       </div>
       <MobileListActions
         v-model:search-open="searchOpen"
@@ -95,8 +97,17 @@ const visibleItems = computed(() => {
     <UiInlineNotice v-if="activeError" tone="danger">{{ activeError }}</UiInlineNotice>
     <div v-if="loadingInitial" class="folder-loading" role="status">正在加载内容…</div>
     <template v-else>
+    <CollectionTree
+      v-if="source && hasCollectionSections(source)"
+      :source="source"
+      :selected-ids="parse.activeSelection"
+      :visible-item-ids="pageItems.map((item) => item.id)"
+      :disabled="loading"
+      :query="query"
+      @toggle="parse.togglePartIds(source.source.id, $event)"
+    />
       <ParseResultListMobile
-        v-if="source && visibleItems.length"
+        v-else-if="source && visibleItems.length"
         :rows="
           visibleItems.map((item) => ({
             id: item.id,

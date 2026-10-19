@@ -87,7 +87,7 @@ const formatEstimatedBytes = (bytes: number) => {
   return `${value.toFixed(digits)} ${units[unitIndex]}`
 }
 const sizeEstimateLabel = computed(() => {
-  if (sizeEstimateLoading.value && !sizeEstimate.value) return '正在估算下载大小…'
+  if (sizeEstimateLoading.value && !sizeEstimate.value) return '正在解析所选视频并估算大小…'
   if (!sizeEstimate.value) return '预计大小暂不可用'
   if (sizeEstimate.value.estimated_bytes === 0 && sizeEstimate.value.unknown_streams > 0) {
     return '预计大小暂不可用'
@@ -304,7 +304,7 @@ const chooseDocumentTreeOutput = async () => {
         <span class="planner-estimate" title="按媒体轨道码率与时长估算，附加文件大小可能未知。">{{ sizeEstimateLabel }}</span>
         <UiButton
           size="compact"
-          :disabled="activeLoading || selectedSourceIds.length === 0 || Boolean(namingError || scheduleError || taskSpeedLimitError || presetError)"
+          :disabled="activeLoading || sizeEstimateLoading || selectedSourceIds.length === 0 || Boolean(namingError || scheduleError || taskSpeedLimitError || presetError)"
           @click="createTasks()"
           >开始下载</UiButton
         >

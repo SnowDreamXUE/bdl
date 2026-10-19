@@ -15,11 +15,19 @@ export function useLibraryFolderDetail(
   const loadBatchSize = ref('50');
   const source = computed(() => {
     const activeSource = parse.activeSource;
-    return !props.loadingInitial && activeSource?.source.input === props.folder.source_url ? activeSource : null;
+    const matches = props.folder.parsed_source_id
+      ? activeSource?.source.id === props.folder.parsed_source_id
+      : activeSource?.source.input === props.folder.source_url;
+    return !props.loadingInitial && matches ? activeSource : null;
   });
   const sourceId = computed(() => source.value?.source.id ?? null);
-  const items = computed(() => source.value?.groups.flatMap((group) => group.items) ?? []);
-  const totalCount = computed(() => source.value?.source.total_count ?? props.folder.media_count);
+  const items = computed(() => {
+    const entries = source.value?.groups.flatMap((group) => group.items) ?? [];
+    return source.value?.source.kind === 'video'
+      ? entries.flatMap(item => item.parts.map(part => ({ ...item, id: part.id, title: part.title || item.title, parts: [part] })))
+      : entries;
+  });
+  const totalCount = computed(() => source.value?.source.kind === 'video' ? items.value.length : source.value?.source.total_count ?? props.folder.media_count);
   const totalPages = computed(() => Math.max(1, Math.ceil(totalCount.value / pageSize)));
   const pageItems = computed(() => {
     const byId = new Map(items.value.map((item) => [item.id, item]));
@@ -60,12 +68,12 @@ export function useLibraryFolderDetail(
   );
   const toggleItem = (item: NormalizedItem) => {
     if (loading.value) return;
-    if (sourceId.value) parse.toggleNode(sourceId.value, item.id);
+    if (sourceId.value) parse.togglePartIds(sourceId.value, itemPartIds(item));
   };
   const toggleCurrentPageSelection = () => {
     if (!sourceId.value) return;
     if (currentPageSelected.value) {
-      pageItems.value.forEach((item) => parse.toggleNode(sourceId.value!, item.id));
+      pageItems.value.forEach((item) => parse.togglePartIds(sourceId.value!, itemPartIds(item)));
       return;
     }
     parse.selectPartIds(sourceId.value, pageItems.value.flatMap(itemPartIds));
@@ -105,7 +113,7 @@ export function useLibraryFolderDetail(
     if (!sourceId.value || loading.value) return;
     const requestedSource = sourceId.value;
     const nextPage = Math.min(Math.max(1, targetPage), totalPages.value);
-    if (source.value?.source.kind === 'watch_later') {
+    if (source.value?.source.kind === 'watch_later' || source.value?.source.kind === 'video') {
       pageItemIds.value[nextPage] = items.value.slice((nextPage - 1) * pageSize, nextPage * pageSize).map((item) => item.id);
     }
     if (!pageItemIds.value[nextPage]) {

@@ -52,11 +52,52 @@ pub struct ResolvedArchiveVideo {
 pub struct ResolvedCollectionPage {
     pub mid: u64,
     pub season_id: u64,
+    pub sections: Vec<CollectionSection>,
     pub title: String,
     pub owner_name: Option<String>,
     pub request: PageRequest,
     pub total_count: Option<usize>,
     pub videos: Vec<ResolvedArchiveVideo>,
+}
+
+/// Optional presentation metadata; paging still belongs to the whole collection.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct CollectionSection {
+    pub id: u64,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub episodes: Vec<CollectionSectionEpisode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct CollectionSectionEpisode {
+    pub aid: u64,
+}
+
+#[derive(serde::Deserialize)]
+struct SectionResponse {
+    code: i64,
+    data: Option<SectionVideo>,
+}
+#[derive(serde::Deserialize)]
+struct SectionVideo {
+    ugc_season: Option<SectionSeason>,
+}
+#[derive(serde::Deserialize)]
+struct SectionSeason {
+    id: u64,
+    #[serde(default)]
+    sections: Vec<CollectionSection>,
+}
+
+fn decode_sections(body: &[u8], season_id: u64) -> Option<Vec<CollectionSection>> {
+    let response: SectionResponse = serde_json::from_slice(body).ok()?;
+    if response.code != 0 {
+        return None;
+    }
+    let season = response.data?.ugc_season?;
+    (season.id == season_id).then_some(season.sections)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -284,7 +325,20 @@ impl CollectionApi for BpiCollectionApi {
             .await
             .map_err(|error| BdlError::Bpi(error.to_string()))?;
 
-        Ok(ResolvedCollectionPage::from_bpi(data, request))
+        let mut page = ResolvedCollectionPage::from_bpi(data, request);
+        // Enrichment failure must never make an otherwise downloadable page fail.
+        if let Some(video) = page.videos.first()
+            && let Ok(response) = bpi_rs::transport::ReqwestTransport::send_request_builder(
+                self.client
+                    .get("https://api.bilibili.com/x/web-interface/view")
+                    .query(&[("bvid", &video.bvid)]),
+                "collection-sections",
+            )
+            .await
+        {
+            page.sections = decode_sections(&response.body, ids.season_id).unwrap_or_default();
+        }
+        Ok(page)
     }
 }
 
@@ -342,6 +396,7 @@ impl ResolvedCollectionPage {
         Self {
             mid: meta.mid,
             season_id: meta.season_id,
+            sections: Vec::new(),
             title: meta.name,
             owner_name: None,
             request,
@@ -451,6 +506,14 @@ fn collection_tree_from_page(
         .map(|video| map_archive_item(&source_key, video))
         .collect::<Vec<_>>();
 
+    let loaded_count = items.len();
+    let groups = collection_groups(
+        &source_key,
+        &title,
+        items,
+        &page.sections,
+        page_state.clone(),
+    );
     NormalizedSourceTree {
         source: SourceSummary {
             id: SourceId(source_key.clone()),
@@ -461,19 +524,75 @@ fn collection_tree_from_page(
                     page.mid, page.season_id
                 )
             }),
-            title: title.clone(),
-            loaded_count: items.len(),
+            title,
+            loaded_count,
             total_count: page.total_count,
             has_more: page_state.has_more,
         },
-        groups: vec![NormalizedGroup {
-            id: GroupId(format!("group:{source_key}")),
-            kind: "collection".to_owned(),
-            title,
-            items,
-            page: Some(page_state),
-        }],
+        groups,
     }
+}
+
+fn collection_groups(
+    source_key: &str,
+    title: &str,
+    items: Vec<NormalizedItem>,
+    sections: &[CollectionSection],
+    page: crate::model::PageState,
+) -> Vec<NormalizedGroup> {
+    let mut seen = std::collections::HashSet::new();
+    let sections: Vec<_> = sections
+        .iter()
+        .filter(|section| section.id > 0 && seen.insert(section.id))
+        .collect();
+    if sections.len() < 2 {
+        return vec![NormalizedGroup {
+            id: GroupId(format!("group:{source_key}")),
+            kind: "collection".into(),
+            title: title.into(),
+            items,
+            page: Some(page),
+        }];
+    }
+    let mut groups: Vec<_> = sections
+        .iter()
+        .map(|section| NormalizedGroup {
+            id: GroupId(format!("group:{source_key}:section:{}", section.id)),
+            kind: "collection_section".into(),
+            title: source_title(&section.title, || format!("分组 {}", section.id)),
+            items: vec![],
+            page: Some(page.clone()),
+        })
+        .collect();
+    let mut membership = std::collections::HashMap::new();
+    for (index, section) in sections.iter().enumerate() {
+        for episode in &section.episodes {
+            membership.entry(episode.aid).or_insert(index);
+        }
+    }
+    let mut unassigned = vec![];
+    for item in items {
+        if let Some(index) = item
+            .parts
+            .first()
+            .and_then(|part| part.aid)
+            .and_then(|aid| membership.get(&aid))
+        {
+            groups[*index].items.push(item);
+        } else {
+            unassigned.push(item);
+        }
+    }
+    if !unassigned.is_empty() {
+        groups.push(NormalizedGroup {
+            id: GroupId(format!("group:{source_key}")),
+            kind: "collection".into(),
+            title: "其他视频".into(),
+            items: unassigned,
+            page: Some(page),
+        });
+    }
+    groups
 }
 
 fn series_tree_from_page(
@@ -658,4 +777,147 @@ fn source_kind_name(kind: SourceKind) -> &'static str {
 
 fn non_empty(value: String) -> Option<String> {
     (!value.trim().is_empty()).then_some(value)
+}
+
+#[cfg(test)]
+mod section_tests {
+    use super::*;
+    fn fixture(page_number: u32, aids: &[u64], sections: bool) -> NormalizedSourceTree {
+        collection_tree_from_page(
+            ResolvedCollectionPage {
+                mid: 1,
+                season_id: 2,
+                title: "合集".into(),
+                owner_name: None,
+                request: PageRequest {
+                    page_number,
+                    page_size: 2,
+                },
+                total_count: Some(5),
+                sections: if sections {
+                    vec![
+                        CollectionSection {
+                            id: 10,
+                            title: "A".into(),
+                            episodes: vec![
+                                CollectionSectionEpisode { aid: 1 },
+                                CollectionSectionEpisode { aid: 3 },
+                            ],
+                        },
+                        CollectionSection {
+                            id: 20,
+                            title: "B".into(),
+                            episodes: vec![
+                                CollectionSectionEpisode { aid: 2 },
+                                CollectionSectionEpisode { aid: 4 },
+                            ],
+                        },
+                    ]
+                } else {
+                    vec![]
+                },
+                videos: aids
+                    .iter()
+                    .map(|aid| ResolvedArchiveVideo {
+                        aid: *aid,
+                        bvid: format!("BV{aid}"),
+                        title: format!("视频{aid}"),
+                        owner_mid: 1,
+                        owner_name: None,
+                        publish_date: None,
+                        cover_url: None,
+                        duration_seconds: None,
+                    })
+                    .collect(),
+            },
+            None,
+        )
+    }
+    #[test]
+    fn optional_metadata_checks_identity_and_can_fail_without_losing_archives() {
+        assert!(decode_sections(br#"{"code":-1,"data":null}"#, 2).is_none());
+        assert!(
+            decode_sections(
+                br#"{"code":0,"data":{"ugc_season":{"id":99,"sections":[]}}}"#,
+                2
+            )
+            .is_none()
+        );
+        let tree = fixture(1, &[1, 2], false);
+        assert_eq!(tree.groups.len(), 1);
+        assert_eq!(tree.source.loaded_count, 2);
+    }
+    #[test]
+    fn all_sections_merge_across_pages_without_duplicate_or_lost_hydrated_items() {
+        let mut tree = fixture(1, &[1, 2], true);
+        assert_eq!(
+            tree.groups
+                .iter()
+                .map(|g| g.title.as_str())
+                .collect::<Vec<_>>(),
+            vec!["A", "B"]
+        );
+        tree.groups[0].items[0].parts[0].cid = Some(999);
+        super::super::paged::merge_collection_page(&mut tree, fixture(2, &[1, 3, 4], true), true)
+            .unwrap();
+        assert_eq!(tree.source.loaded_count, 4);
+        assert_eq!(tree.groups[0].items.len(), 2);
+        assert_eq!(tree.groups[1].items.len(), 2);
+        assert_eq!(tree.groups[0].items[0].parts[0].cid, Some(999));
+        super::super::paged::merge_collection_page(&mut tree, fixture(3, &[5], true), true)
+            .unwrap();
+        assert_eq!(tree.source.loaded_count, 5);
+        assert!(!tree.source.has_more);
+        assert_eq!(tree.groups.last().unwrap().title, "其他视频");
+        assert!(
+            tree.groups
+                .iter()
+                .all(|g| g.page.as_ref().unwrap().page_number == 3)
+        );
+    }
+    #[test]
+    fn recovered_section_metadata_moves_existing_items_without_losing_hydration() {
+        let mut tree = fixture(1, &[1, 2], false);
+        tree.groups[0].items[0].parts[0].cid = Some(999);
+        super::super::paged::merge_collection_page(&mut tree, fixture(1, &[1, 2], true), false)
+            .unwrap();
+        assert_eq!(tree.source.loaded_count, 2);
+        assert_eq!(
+            tree.groups.iter().find(|g| g.title == "A").unwrap().items[0].parts[0].cid,
+            Some(999)
+        );
+    }
+    #[tokio::test]
+    #[ignore = "public Bilibili API availability"]
+    async fn live_collection_sections() {
+        let tree = CollectionResolver::new()
+            .unwrap()
+            .resolve(
+                ClassifiedInput::Collection {
+                    raw_url: "https://space.bilibili.com/736897/lists/7774115?type=season".into(),
+                },
+                ResolveOptions::default(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            tree.groups
+                .iter()
+                .filter(|g| g.kind == "collection_section")
+                .count()
+                >= 3
+        );
+        assert_eq!(
+            tree.groups.iter().map(|g| g.items.len()).sum::<usize>(),
+            tree.source.loaded_count
+        );
+        println!(
+            "groups: {:?}, loaded: {}",
+            tree.groups
+                .iter()
+                .map(|g| (&g.title, g.items.len()))
+                .collect::<Vec<_>>(),
+            tree.source.loaded_count
+        );
+    }
 }

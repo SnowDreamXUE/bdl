@@ -15,6 +15,7 @@ const api = vi.hoisted(() => ({
   parseRefreshSource: vi.fn(),
   selectionCreateTasks: vi.fn(),
   selectionEstimateSize: vi.fn(),
+  selectionPrepare: vi.fn(),
 }))
 
 const sourceTree = (id: string, title: string): NormalizedSourceTree => ({
@@ -61,6 +62,65 @@ const sourceTree = (id: string, title: string): NormalizedSourceTree => ({
 vi.mock('../api/tauri', () => api)
 
 describe('parse store', () => {
+  it('parses only the requested batch, retains failures and retries without creating downloads', async () => {
+    const parse = useParseStore()
+    const tree = sourceTree('watch_later:batch', '稍后再看')
+    tree.source.kind = 'watch_later'
+    tree.groups[0]!.items = Array.from({ length: 1000 }, (_, i) => sourceTree(`video:${i}`, `视频 ${i}`).groups[0]!.items[0]!)
+    parse.upsertSource(tree)
+    let attempts = 0
+    api.selectionPrepare.mockImplementation(async (_id: string, ids: string[]) => {
+      attempts++
+      if (attempts === 2) throw new Error('该视频已失效')
+      const result = JSON.parse(JSON.stringify(parse.activeSource)) as NormalizedSourceTree
+      for (const part of result.groups.flatMap(group => group.items.flatMap(item => item.parts))) {
+        if (ids.includes(part.id)) { part.cid = 1; part.streams = [{ id: 'fixture' } as never] }
+      }
+      return result
+    })
+    await parse.prepareLoadedVideos(tree.source.id, 'next', 20)
+    expect(api.selectionPrepare).toHaveBeenCalledTimes(20)
+    expect(parse.preparationBySource[tree.source.id]?.failures).toHaveLength(1)
+    await parse.prepareLoadedVideos(tree.source.id, 'retry')
+    expect(api.selectionPrepare).toHaveBeenCalledTimes(21)
+    expect(parse.preparationBySource[tree.source.id]?.failures).toHaveLength(0)
+    expect(api.selectionCreateTasks).not.toHaveBeenCalled()
+  })
+  it('stops preparation without processing the next item and ignores results after leaving', async () => {
+    const parse = useParseStore()
+    const tree = sourceTree('watch_later:stop', '稍后再看')
+    tree.groups[0]!.items.push(sourceTree('other', '另一视频').groups[0]!.items[0]!)
+    parse.upsertSource(tree)
+    let resolve!: (tree: NormalizedSourceTree) => void
+    api.selectionPrepare.mockReturnValue(new Promise(done => { resolve = done }))
+    const pending = parse.prepareLoadedVideos(tree.source.id, 'all')
+    parse.stopPacedParsing(tree.source.id)
+    await parse.clearWorkspace()
+    resolve(tree)
+    await pending
+    expect(api.selectionPrepare).toHaveBeenCalledTimes(1)
+    expect(api.parseCancel).toHaveBeenCalled()
+    expect(parse.activeSource).toBeNull()
+    expect(parse.preparationBySource).toEqual({})
+  })
+  it('keeps a selected watch-later video selected when estimation expands its parts', () => {
+    const parse = useParseStore()
+    const tree = sourceTree('watch_later:170001', '稍后再看')
+    tree.source.kind = 'watch_later'
+    parse.upsertSource(tree)
+    parse.selectAllLoaded(tree.source.id)
+    const hydrated = structuredClone(tree)
+    const part = hydrated.groups[0]!.items[0]!.parts[0]!
+    hydrated.groups[0]!.items[0]!.parts = [
+      { ...part, id: 'part:BVtest:1', cid: 1 },
+      { ...part, id: 'part:BVtest:2', cid: 2 },
+    ]
+    parse.upsertSource(hydrated)
+    expect(parse.activeSelection).toEqual(['part:BVtest:1', 'part:BVtest:2'])
+    parse.selectPartIds(tree.source.id, ['part:BVtest:2'], 'replace')
+    parse.upsertSource(hydrated)
+    expect(parse.activeSelection).toEqual(['part:BVtest:2'])
+  })
   it('does not restore a private list after leaving its workspace', async () => {
     let resolve!: (tree: NormalizedSourceTree) => void;
     api.parseCreateSource.mockReturnValueOnce(new Promise((done) => { resolve = done }))

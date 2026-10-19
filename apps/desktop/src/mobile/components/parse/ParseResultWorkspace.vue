@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import CollectionTree from '../../../shared/ui/CollectionTree.vue';
+import { hasCollectionSections } from '../../../shared/features/parse/collectionTree';
 import UiButton from '../../../shared/ui/Button.vue';
 import UiEmptyState from '../../../shared/ui/EmptyState.vue';
 import UiInlineNotice from '../../../shared/ui/InlineNotice.vue';
@@ -15,6 +17,7 @@ import { useParseResultWorkspace } from '../../../shared/features/parse/useParse
 const { embedded = false } = defineProps<{ embedded?: boolean }>();
 const emit = defineEmits<{ download: [] }>();
 const {
+  parse,
   downloadAllLoaded,
   loadBatchSize,
   activeSource,
@@ -92,8 +95,16 @@ const visibleRows = computed(() => {
       @download-all="hasMore ? parseAndDownload() : downloadAllLoaded()"
       @stop="stopParsing"
     />
+    <CollectionTree
+      v-if="hasCollectionSections(activeSource)"
+      :source="activeSource"
+      :selected-ids="selectedIds"
+      :disabled="activeLoading"
+      :query="query"
+      @toggle="parse.togglePartIds(activeSource.source.id, $event)"
+    />
     <ParseResultListMobile
-      v-if="visibleRows.length"
+      v-else-if="visibleRows.length"
       :rows="visibleRows"
       :source="activeSource"
       :managing="managing"
@@ -119,6 +130,7 @@ const visibleRows = computed(() => {
       compact
       embedded
     />
+    <UiButton v-if="hasCollectionSections(activeSource) && hasMore" variant="secondary" :disabled="activeLoading" @click="loadMore">继续加载内容</UiButton>
     <UiInlineNotice v-if="activeError" tone="danger">{{ activeError }}</UiInlineNotice>
     <footer class="mobile-download-footer mobile-download-bar">
       <UiCheckbox

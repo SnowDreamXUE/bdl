@@ -1,13 +1,14 @@
 import { defineStore } from 'pinia'
 
-import type { LibraryCategory, AccountLibraryPage } from '../api/dto'
-import { accountLibraryList } from '../api/tauri'
+import type { LibraryCategory, LibraryBrowsePage, LibraryBrowseItem } from '../api/dto'
+import { accountLibraryList, parseCreateSource, parseCloseSource } from '../api/tauri'
 
 const PAGE_SIZE = 20
 
 interface LibraryState {
   activeKind: LibraryCategory
-  pages: Record<LibraryCategory, AccountLibraryPage | null>
+  pages: Record<LibraryCategory, LibraryBrowsePage | null>
+  watchLaterItems: LibraryBrowseItem[] | null
   loading: boolean
   error: string | null
   requestGeneration: number
@@ -22,11 +23,12 @@ export const useLibraryStore = defineStore('library', {
       collected_favorite: null,
     },
     loading: false,
+    watchLaterItems: null,
     error: null,
     requestGeneration: 0,
   }),
   getters: {
-    activePage(state): AccountLibraryPage | null {
+    activePage(state): LibraryBrowsePage | null {
       return state.pages[state.activeKind]
     },
   },
@@ -35,28 +37,52 @@ export const useLibraryStore = defineStore('library', {
       if (kind === this.activeKind) return
       this.activeKind = kind
       this.error = null
-      if (kind === 'watch_later' || this.pages[kind]) {
-        this.requestGeneration += 1
-        this.loading = false
-        return
-      }
       await this.load(kind, 1)
     },
     async load(kind?: LibraryCategory, page = 1) {
       const targetKind = kind ?? this.activeKind
-      if (targetKind === 'watch_later') return
       const generation = this.requestGeneration + 1
       this.requestGeneration = generation
       this.loading = true
       this.error = null
+      const startedAt = Date.now()
       try {
-        const result = await accountLibraryList({ kind: targetKind, page, page_size: PAGE_SIZE })
+        let result: LibraryBrowsePage
+        if (targetKind === 'watch_later') {
+          let entries = this.watchLaterItems
+          if (page === 1 || !entries) {
+            const tree = await parseCreateSource({ input: 'https://www.bilibili.com/list/watchlater', fetch_streams: false, expand_video_collection: false })
+            try {
+              entries = tree.groups.flatMap(group => group.items).map(item => {
+                const part = item.parts[0]
+                return {
+                  kind: 'watch_later' as const, media_id: item.id, title: item.title,
+                  description: null, cover_url: item.cover_url, owner_name: item.owner_name,
+                  owner_mid: item.owner_mid == null ? null : String(item.owner_mid), media_count: 0,
+                  source_url: part?.bvid ? `https://www.bilibili.com/video/${part.bvid}` : `https://www.bilibili.com/video/av${part?.aid}`,
+                }
+              })
+            } finally {
+              await parseCloseSource(tree.source.id)
+            }
+            if (generation === this.requestGeneration) this.watchLaterItems = entries
+          }
+          const currentPage = Math.min(Math.max(1, page), Math.max(1, Math.ceil(entries.length / PAGE_SIZE)))
+          result = { items: entries.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE), total: entries.length, page: currentPage, page_size: PAGE_SIZE, has_more: currentPage * PAGE_SIZE < entries.length }
+        } else {
+          result = await accountLibraryList({ kind: targetKind, page, page_size: PAGE_SIZE })
+        }
         if (generation === this.requestGeneration) this.pages[targetKind] = result
       } catch (error) {
         if (generation === this.requestGeneration) {
           this.error = error instanceof Error ? error.message : String(error)
         }
       } finally {
+        // Keep fast refreshes from flashing a skeleton for only one frame.
+        const remaining = 200 - (Date.now() - startedAt)
+        if (generation === this.requestGeneration && remaining > 0) {
+          await new Promise(resolve => setTimeout(resolve, remaining))
+        }
         if (generation === this.requestGeneration) this.loading = false
       }
     },
@@ -64,6 +90,8 @@ export const useLibraryStore = defineStore('library', {
       this.requestGeneration += 1
       this.pages.created_favorite = null
       this.pages.collected_favorite = null
+      this.pages.watch_later = null
+      this.watchLaterItems = null
       this.loading = false
       this.error = null
     },

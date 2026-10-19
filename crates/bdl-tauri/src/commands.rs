@@ -636,6 +636,30 @@ pub async fn selection_create_tasks(
 }
 
 #[tauri::command]
+pub async fn selection_prepare(
+    state: State<'_, AppState>,
+    source_id: String,
+    part_ids: Vec<String>,
+) -> CommandResult<NormalizedSourceTree> {
+    let ids = part_ids.into_iter().map(PartId).collect::<Vec<_>>();
+    let prepared = state.prepare_selection(&SourceId(source_id), &ids).await?;
+    for id in &prepared.part_ids {
+        let ready = crate::parse_session::find_part(&prepared.tree, id)
+            .is_some_and(|part| part.cid.is_some() && !part.streams.is_empty());
+        if !ready {
+            return Err(BdlError::Planning {
+                message: format!(
+                    "分 P `{}` 尚无可用音视频流，请检查视频是否可播放后重试。",
+                    id.0
+                ),
+            }
+            .into());
+        }
+    }
+    Ok(prepared.tree)
+}
+
+#[tauri::command]
 pub async fn selection_estimate_size(
     app: AppHandle,
     state: State<'_, AppState>,

@@ -13,6 +13,8 @@ const props = defineProps<{
   duration?: number | null;
   sizeLabel?: string | null;
   selected?: boolean;
+  indeterminate?: boolean;
+  flat?: boolean;
   disabled?: boolean;
   playable?: boolean;
   playbackLabel?: string;
@@ -34,14 +36,14 @@ function toggleCard(event: MouseEvent) {
 <template>
   <article
     class="media-list-row"
-    :class="{ 'is-selected': selected }"
+    :class="{ 'is-selected': selected, 'media-list-row-flat': flat }"
     :data-selected="Boolean(selected)"
     role="listitem"
     @click="toggleCard($event)"
   >
     <div class="media-selection">
       <UiCheckbox
-        :model-value="Boolean(selected)"
+        :model-value="indeterminate ? 'indeterminate' : Boolean(selected)"
         :label="`选择 ${title}`"
         :disabled="disabled"
         compact
@@ -131,6 +133,14 @@ function toggleCard(event: MouseEvent) {
 
 .media-list-row:has(.media-actions) {
   grid-template-columns: 1.5rem 7.75rem minmax(0, 1fr) auto auto;
+}
+
+.media-list-row-flat {
+  height: 6rem;
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .media-list-row:hover {
@@ -323,6 +333,37 @@ function toggleCard(event: MouseEvent) {
   .media-metadata {
     flex-wrap: wrap;
   }
+
+  .media-list-row-flat,
+  .media-list-row-flat:has(.media-actions) {
+    grid-template-columns: 1.375rem 4.5rem minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    align-content: center;
+    gap: 0.25rem 0.5rem;
+    padding-inline: 0.25rem;
+  }
+
+  .media-list-row-flat .media-selection,
+  .media-list-row-flat .media-cover {
+    grid-row: 1 / 3;
+  }
+
+  .media-list-row-flat .media-cover {
+    width: 4.5rem;
+    height: 2.75rem;
+  }
+
+  .media-list-row-flat .media-facts {
+    grid-column: 3;
+    flex-direction: row;
+    justify-content: flex-start;
+    align-items: center;
+  }
+
+  .media-list-row-flat .media-metadata {
+    flex-wrap: nowrap;
+  }
+
 }
 
 @media (prefers-reduced-motion: reduce) {

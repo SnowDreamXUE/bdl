@@ -486,4 +486,7 @@ export interface ParseRules {
 }
 
 export type LibraryCategory = AccountLibraryFolderKind | 'watch_later'
-export type LibraryContentSource = Pick<AccountLibraryFolder, 'title' | 'source_url' | 'owner_name' | 'media_count'>
+export type LibraryContentSource = Pick<AccountLibraryFolder, 'title' | 'source_url' | 'owner_name' | 'media_count'> & { parsed_source_id?: string }
+
+export type LibraryBrowseItem = Omit<AccountLibraryFolder, 'kind'> & { kind: LibraryCategory }
+export type LibraryBrowsePage = Omit<AccountLibraryPage, 'items'> & { items: LibraryBrowseItem[] }

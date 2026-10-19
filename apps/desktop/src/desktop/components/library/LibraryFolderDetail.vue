@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import CollectionTree from '../../../shared/ui/CollectionTree.vue';
+import { hasCollectionSections } from '../../../shared/features/parse/collectionTree';
 import { computed } from 'vue';
 import SourceMediaList from '../parse/SourceMediaList.vue';
 import UiButton from '../../../shared/ui/Button.vue'
@@ -21,7 +23,7 @@ const rows = computed(() => pageItems.value.map((item) => ({ id: item.id, title:
     <header
       class="library-folder-header flex min-w-0 items-center justify-between gap-4 border-b border-(--color-border) pb-4"
     >
-      <div class="flex min-w-0 items-center gap-3">
+      <div class="library-folder-title flex min-w-0 flex-1 items-center gap-3">
         <button
           type="button"
           class="grid size-8 shrink-0 place-items-center rounded-md text-(--color-muted) hover:bg-(--color-panel) hover:text-(--color-text)"
@@ -30,8 +32,9 @@ const rows = computed(() => pageItems.value.map((item) => ({ id: item.id, title:
         >
           <UIcon name="i-tabler-arrow-left" class="size-4" aria-hidden="true" />
         </button>
-        <h2 class="truncate m-0 text-base text-(--color-text)" :title="folder.title">
+        <h2 class="truncate m-0 min-w-0 text-sm text-(--color-text)" :title="folder.title">
           <ExternalLinkButton
+            class="max-w-full"
             :href="folder.source_url"
             :label="`在 Bilibili 打开 ${folder.title}`"
             :show-icon="false"
@@ -41,7 +44,7 @@ const rows = computed(() => pageItems.value.map((item) => ({ id: item.id, title:
         </h2>
       </div>
       <div v-if="!loadingInitial" class="source-function-toolbar">
-        <SourceLoadStatus :loaded="source?.source.loaded_count ?? items.length" :total="totalCount" />
+        <SourceLoadStatus :loaded="source?.source.kind === 'video' ? items.length : source?.source.loaded_count ?? items.length" :total="totalCount" />
         <SourceParseControls
           :source-id="sourceId ?? undefined"
           v-if="hasMore || pacedParsing"
@@ -77,6 +80,14 @@ const rows = computed(() => pageItems.value.map((item) => ({ id: item.id, title:
     <div v-if="loadingInitial" class="library-detail-skeleton" role="status" aria-label="正在加载合集内容">
       <div v-for="index in 6" :key="index" class="library-detail-skeleton-row" aria-hidden="true"><span></span><i></i></div>
     </div>
+    <CollectionTree
+      v-else-if="source && hasCollectionSections(source)"
+      :source="source"
+      :selected-ids="parse.activeSelection"
+      :visible-item-ids="pageItems.map((item) => item.id)"
+      :disabled="loading"
+      @toggle="parse.togglePartIds(source.source.id, $event)"
+    />
     <SourceMediaList
       v-else-if="source && pageItems.length"
       class="min-h-0 flex-1"
@@ -151,6 +162,7 @@ const rows = computed(() => pageItems.value.map((item) => ({ id: item.id, title:
 
 .source-function-toolbar {
   min-width: 0;
+  flex-shrink: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -192,7 +204,9 @@ const rows = computed(() => pageItems.value.map((item) => ({ id: item.id, title:
   background: var(--color-panel);
 }
 
-@media (width <= 900px) {
+@media (width <= 700px) {
   .library-folder-header { flex-wrap: wrap; }
+  .library-folder-title { flex-basis: 100%; }
+  .source-function-toolbar { justify-content: flex-start; }
 }
 </style>

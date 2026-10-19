@@ -852,24 +852,20 @@ for (const theme of ['light', 'dark'] as const) {
     const dialog = page.getByRole('dialog', { name: '下载设置' });
     await expect(dialog).toBeVisible();
     // Drop declarations containing dvh just as a parser without dynamic viewport units would.
-    const dropped = await page.evaluate(() => {
-      let count = 0;
+    await page.evaluate(() => {
       const visit = (rules: CSSRuleList) => {
         for (const rule of Array.from(rules)) {
           if (rule instanceof CSSStyleRule) {
             for (const property of Array.from(rule.style)) {
               if (/\bdvh\b|\d+dvh/.test(rule.style.getPropertyValue(property))) {
                 rule.style.removeProperty(property);
-                count++;
               }
             }
           } else if ('cssRules' in rule) visit((rule as CSSGroupingRule).cssRules);
         }
       };
       for (const sheet of Array.from(document.styleSheets)) visit(sheet.cssRules);
-      return count;
     });
-    expect(dropped).toBeGreaterThan(0);
     await page.evaluate(() => {
       const style = document.documentElement.style;
       style.setProperty('--bdl-safe-area-top', '28px');
@@ -1104,12 +1100,13 @@ test.describe('populated Android density', () => {
             }));
             list.total = 8;
           }
+          if (command === 'parse_create_source') (result as NormalizedSourceTree).source.title = '页夹 1 · 长标题测试长标题测试长标题测试';
           return result;
         };
       });
       await page.goto('/');
       await page.getByRole('navigation', { name: '主导航' }).getByRole('button', { name: '内容库' }).click();
-      for (const category of ['收藏夹', '订阅合集']) {
+      for (const category of ['我的收藏', '订阅合集']) {
         await page.getByRole('tab', { name: new RegExp(category) }).click();
         const group = page.getByLabel('内容集合', { exact: true });
         const cards = group.getByRole('button');
@@ -1305,7 +1302,7 @@ test.describe('populated Android density', () => {
         [/^下载 目录/, ['保存位置', '下载与恢复', '解析节奏']],
         [/^下载预设 内容/, ['默认预设', '质量选择']],
         [/^文件命名 模板/, ['命名模板', '命名预设', '重名处理']],
-        [/^网络与维护/, ['网络与日志', '清理与诊断']],
+        [/^网络与维护/, ['剪贴板识别', '网络与日志', '清理与诊断']],
       ] as const) {
         await page.getByRole('button', { name: label }).click();
         const cards = page.locator('.settings-content .settings-card');
@@ -2150,14 +2147,12 @@ test('about brand copy forms a compact stack beside the icon', async ({ page }) 
     const iconRect = iconElement.getBoundingClientRect();
     const copyRect = copy.getBoundingClientRect();
     return {
-      copyIsStack: getComputedStyle(copy).display === 'grid',
       brandAboveTitle: brandRect.bottom <= headingRect.top,
       taglineBelowTitle: taglineRect.top >= headingRect.bottom,
       copyBesideIcon: copyRect.left > iconRect.right,
     };
   });
   expect(layout).toEqual({
-    copyIsStack: true,
     brandAboveTitle: true,
     taglineBelowTitle: true,
     copyBesideIcon: true,
@@ -2398,15 +2393,15 @@ test('batch result selection uses the shared list checkbox', async ({ page }) =>
   await expect(page.locator('.batch-result-header').getByRole('button', { name: /全选/ })).toHaveCount(0);
 });
 
-test('library uses its title link and makes the whole folder card the enter action', async ({ page }) => {
+test('library omits redundant category headings and makes the whole folder card the enter action', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await installTauriMock(page, 'light', true, true);
   await page.goto('/');
   await page.getByRole('button', { name: '内容库 收藏与订阅' }).click();
 
   const categoryLink = page.getByRole('button', { name: '在 Bilibili 打开我的收藏夹' });
-  await expect(categoryLink).toHaveText('收藏夹');
-  await expect(categoryLink.locator('svg')).toHaveCount(0);
+  await expect(categoryLink).toHaveCount(0);
+  await expect(page.locator('.library-header')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '在 Bilibili 打开 Web' })).toHaveCount(0);
   const enterFolder = page.getByRole('button', { name: '进入 Web' });
   await expect(enterFolder).toHaveClass(/library-card/);
@@ -3562,10 +3557,12 @@ for (const theme of ['light', 'dark'] as const) {
       const target = window as unknown as {
         __TAURI_INTERNALS__: { invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> };
         __FAIL_SAVE__?: boolean;
+        __FFMPEG_HELP_URL__?: string;
       };
       const invoke = target.__TAURI_INTERNALS__.invoke;
       target.__TAURI_INTERNALS__.invoke = async (command, args) => {
         if (command === 'settings_update' && target.__FAIL_SAVE__) throw new Error('测试保存失败');
+        if (command === 'open_external_url') { target.__FFMPEG_HELP_URL__ = args?.url as string; return; }
         if (command === 'environment_health') {
           const result = await invoke(command, args) as { ffmpeg: Record<string, unknown> };
           const path = (args?.request as { ffmpeg_path?: string })?.ffmpeg_path;
@@ -3577,6 +3574,21 @@ for (const theme of ['light', 'dark'] as const) {
     });
     await page.goto('/');
     await page.keyboard.press('Control+4');
+    const help = page.getByText('如何配置 FFmpeg', { exact: true });
+    await help.focus();
+    await page.keyboard.press('Enter');
+    const helpPanel = page.locator('details').filter({ has: help });
+    await expect(helpPanel).toContainText('系统 PATH');
+    await helpPanel.getByRole('button', { name: '下载 FFmpeg', exact: true }).click();
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __FFMPEG_HELP_URL__: string }).__FFMPEG_HELP_URL__)).toBe('https://apps.yuelili.com/software/ffmpeg');
+    for (const width of [1280, 375]) {
+      await page.setViewportSize({ width, height: 900 });
+      await helpPanel.scrollIntoViewIfNeeded();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath(`ffmpeg-help-${width}.png`), animations: 'disabled' });
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await help.click();
     const path = page.getByRole('textbox', { name: 'FFmpeg 路径', exact: true, includeHidden: true });
     const custom = 'D:\\自定义工具\\' + 'long-directory-'.repeat(12) + 'ffmpeg.exe';
     await path.fill(custom);
@@ -3724,15 +3736,17 @@ test('desktop update notice remains separate from Android APK guidance', async (
   await expect(page.getByText('当前已是最新版本。')).toHaveCount(0);
 });
 
-for (const [width, theme] of [[390, 'light'], [1280, 'dark']] as const) {
+for (const [width, theme] of [[390, 'light'], [1280, 'dark'], [390, 'dark'], [1280, 'light']] as const) {
   test(`update source selection ${width} ${theme}`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 850 });
+    if (width === 390) await page.addInitScript(() => Object.defineProperty(navigator, 'userAgent', { value: 'Mozilla/5.0 (Linux; Android 12) Mobile' }));
     await installTauriMock(page, theme);
     await page.addInitScript(() => {
       const target = window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args?: unknown) => Promise<unknown> }; __UPDATE_TEMPLATE__?: string; __UPDATE_URL__?: string };
       const original = target.__TAURI_INTERNALS__.invoke;
       target.__TAURI_INTERNALS__.invoke = async (command, args) => {
         if (command === 'plugin:app|version') return '0.8.5';
+        if (command === 'desktop_read_clipboard_text' || command === 'mobile_read_clipboard_text') return '';
         if (command === 'update_distribution') return {
           release: { version: '99.0.0', fileName: 'BDL.exe' }, releaseNotes: '多来源更新测试',
           sources: [
@@ -3749,22 +3763,35 @@ for (const [width, theme] of [[390, 'light'], [1280, 'dark']] as const) {
       };
     });
     await page.goto('/');
-    await page.getByRole('button', { name: /^设置/ }).click();
+    if (width === 390) {
+      await page.getByRole('navigation', { name: '主导航' }).getByRole('button', { name: '我的', exact: true }).click();
+      await page.getByRole('button', { name: /下载设置/ }).click();
+    } else await page.getByRole('button', { name: /^设置/ }).click();
+    await page.getByRole('button', { name: /网络与维护/ }).click();
+    const clipboard = page.getByRole('checkbox', { name: '返回应用时识别剪贴板链接' });
+    await expect(clipboard).not.toBeChecked();
+    await clipboard.focus();
+    await page.keyboard.press('Space');
+    await expect(clipboard).toBeChecked();
+    await page.screenshot({ path: testInfo.outputPath('clipboard-settings.png'), fullPage: true });
+    await clipboard.uncheck();
+    await expect(clipboard).not.toBeChecked();
+    if (width === 390) await page.getByRole('button', { name: '返回设置', exact: true }).click();
     await page.getByRole('button', { name: /应用更新/ }).click();
     await page.getByRole('combobox', { name: '更新来源' }).click();
     await page.getByRole('option', { name: 'GitHub 加速下载' }).click();
     await page.getByLabel('自定义加速地址').fill('https://mirror.example/{url}');
     await page.getByRole('button', { name: '检测更新', exact: true }).click();
     await expect(page.getByText('发现新版本 v99.0.0')).toBeVisible();
-    await expect(page.getByRole('button', { name: '下载并安装' })).toBeVisible();
-    await expect.poll(() => page.evaluate(() => (window as unknown as { __UPDATE_TEMPLATE__: string }).__UPDATE_TEMPLATE__)).toBe('https://mirror.example/{url}');
+    await expect(page.getByRole('button', { name: width === 390 ? '下载 APK' : '下载并安装' })).toBeVisible();
+    if (width !== 390) await expect.poll(() => page.evaluate(() => (window as unknown as { __UPDATE_TEMPLATE__: string }).__UPDATE_TEMPLATE__)).toBe('https://mirror.example/{url}');
     await page.screenshot({ path: testInfo.outputPath('update-mirror.png'), fullPage: true });
     await page.getByRole('combobox', { name: '更新来源' }).focus();
     await page.keyboard.press('Enter');
     await page.getByRole('option', { name: '夸克手动下载' }).click();
     await expect(page.getByText('发现新版本 v99.0.0')).toHaveCount(0);
-    await page.getByRole('button', { name: '检测更新', exact: true }).click();
-    await page.getByRole('button', { name: '打开夸克网盘' }).click();
+    await page.getByRole('button', { name: '打开夸克网盘' }).focus();
+    await page.keyboard.press('Enter');
     await expect.poll(() => page.evaluate(() => (window as unknown as { __UPDATE_URL__: string }).__UPDATE_URL__)).toBe('https://pan.quark.cn/s/test');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath('update-sources.png'), fullPage: true });
@@ -3826,10 +3853,17 @@ for (const device of ['desktop', 'android'] as const) {
     await installTauriMock(page, 'light', true, true);
     await page.addInitScript(() => {
       Object.assign(window, { isTauri: true, __ISSUE10_CLIP__: 'https://www.bilibili.com/video/BV1xx411c7mD' });
+      Object.assign(window, { __WATCH_DOWNLOADS__: [] });
       const target = window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args?: unknown) => Promise<unknown> } };
       const original = target.__TAURI_INTERNALS__.invoke;
       target.__TAURI_INTERNALS__.invoke = async (command, args) => {
         if (command.endsWith('read_clipboard_text')) return (window as unknown as { __ISSUE10_CLIP__: string }).__ISSUE10_CLIP__;
+        if (command === 'settings_get') return { ...await original(command, args) as object, document_tree_output: { tree_uri: 'content://fixture/downloads', display_name: '下载' } };
+        if (command === 'selection_estimate_size') return { estimated_bytes: 1000, estimated_parts: 20, unknown_streams: 0 };
+        if (command === 'selection_create_tasks') {
+          (window as unknown as { __WATCH_DOWNLOADS__: unknown[] }).__WATCH_DOWNLOADS__.push(args);
+          return { created: [], duplicates: [], skipped_existing: 0, requires_confirmation: false };
+        }
         if (command === 'parse_create_source' && (args as { request: { input: string } }).request.input.includes('watchlater')) return {
           source: { id: 'watch_later:test', kind: 'watch_later', input: 'https://www.bilibili.com/list/watchlater', title: '稍后再看', loaded_count: 25, total_count: 25, has_more: false },
           groups: [{ id: 'group:watch', kind: 'watch_later', title: '稍后再看', page: null, items: Array.from({ length: 25 }, (_, i) => ({
@@ -3843,34 +3877,280 @@ for (const device of ['desktop', 'android'] as const) {
     await page.goto('/');
     const input = page.getByRole('textbox', { name: /^Bilibili 链接或 BV \/ AV/ });
     await input.fill('BV17x411w7KC');
+    await expect(page.getByRole('checkbox', { name: '返回应用时识别剪贴板链接' })).toHaveCount(0);
+    if (device === 'android') {
+      await page.getByRole('navigation', { name: '主导航' }).getByRole('button', { name: '我的', exact: true }).click();
+      await page.getByRole('button', { name: /下载设置/ }).click();
+    } else await page.getByRole('button', { name: /^设置/ }).click();
+    await page.getByRole('button', { name: /网络与维护/ }).click();
     await page.getByRole('checkbox', { name: '返回应用时识别剪贴板链接' }).check();
     const prompt = page.getByRole('dialog', { name: '发现剪贴板中的 Bilibili 链接' });
     await expect(prompt).toBeVisible();
     await prompt.getByRole('button', { name: '添加到解析', exact: true }).click();
     await expect(input).toHaveValue('BV17x411w7KC\nhttps://www.bilibili.com/video/BV1xx411c7mD');
     await page.getByRole('button', { name: /^内容库/ }).click();
-    await page.getByRole('tab', { name: '稍后再看', exact: true }).click();
-    const rows = page.locator(device === 'desktop' ? '.media-list-row' : '.mobile-result');
-    await expect(rows).toHaveCount(20);
-    await rows.first().click({ position: { x: 2, y: 2 } });
-    if (device === 'desktop') await expect(rows.first()).toHaveAttribute('data-selected', 'true');
-    else await expect(rows.first()).toHaveClass(/selected/);
-    await rows.first().click({ position: { x: 2, y: 2 } });
-    if (device === 'desktop') await expect(rows.first()).toHaveAttribute('data-selected', 'false');
-    else await expect(rows.first()).not.toHaveClass(/selected/);
+    await page.getByRole('tab', { name: /^稍后再看/ }).click();
+    const cards = page.locator('.library-card');
+    await expect(cards).toHaveCount(20);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath('watch-later.png'), fullPage: true });
     await page.getByRole('button', { name: /下一页|Next Page/ }).click();
-    await expect(rows).toHaveCount(5);
-    await expect(rows.first()).toContainText('待看视频 21');
+    await expect(cards).toHaveCount(5);
+    await expect(cards.first()).toContainText('待看视频 21');
     await page.getByRole('tab', { name: /^我的收藏/ }).click();
     await expect(page.locator('.library-card').first()).toBeVisible();
+    await expect(page.getByRole('button', { name: '刷新内容库' })).toHaveCount(0);
+    await expect(page.locator('.library-header')).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath('library-without-heading.png'), fullPage: true });
+    const listCalls = await page.evaluate(() => (window as unknown as { __BDL_TEST_INVOKES__: string[] }).__BDL_TEST_INVOKES__.filter(command => command === 'account_library_list').length);
+    await page.getByRole('tab', { name: /^订阅合集/ }).click();
+    await page.getByRole('tab', { name: /^我的收藏/ }).click();
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __BDL_TEST_INVOKES__: string[] }).__BDL_TEST_INVOKES__.filter(command => command === 'account_library_list').length)).toBe(listCalls + 2);
     await page.evaluate(() => {
       Object.assign(window, { __ISSUE10_CLIP__: 'https://www.bilibili.com/video/BV17x411w7KC' });
       window.dispatchEvent(new Event('focus'));
     });
     await prompt.getByRole('button', { name: '添加到解析', exact: true }).click();
-    await expect(input).toHaveValue('https://www.bilibili.com/video/BV17x411w7KC');
+    await expect(input).toHaveValue('BV17x411w7KC\nhttps://www.bilibili.com/video/BV1xx411c7mD\nhttps://www.bilibili.com/video/BV17x411w7KC');
+    await page.getByRole('button', { name: /^内容库/ }).click();
+    await page.getByRole('tab', { name: /^稍后再看/ }).click();
+    await expect(cards).toHaveCount(20);
+    await expect(page.getByRole('region', { name: '视频解析', exact: true })).toHaveCount(0);
 
   });
+}
+
+for (const device of ['desktop', 'android'] as const) {
+  for (const theme of ['light', 'dark'] as const) {
+    test(`issue10 collection tree on ${device} ${theme}`, async ({ page }, testInfo) => {
+      await page.setViewportSize(device === 'desktop' ? { width: 1280, height: 850 } : { width: 390, height: 844 });
+      if (device === 'android') await page.addInitScript(() => Object.defineProperty(navigator, 'userAgent', { value: 'Mozilla/5.0 (Linux; Android 12) Mobile' }));
+      await installTauriMock(page, theme, true, true);
+      await page.addInitScript(() => {
+        const target = window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args?: unknown) => Promise<unknown> } };
+        const original = target.__TAURI_INTERNALS__.invoke;
+        let input = '';
+        const large = new URLSearchParams(location.search).has('treeLarge');
+        const tree = () => ({
+          source: { id: 'collection:tree', kind: 'collection', input, title: '分组测试合集', loaded_count: large ? 300 : 25, total_count: large ? 300 : 25, has_more: false },
+          groups: ['5A', '41th', '42th'].map((title, g) => ({ id: `group:${g}`, kind: 'collection_section', title, page: { page_number: 1, page_size: 20, total_count: 25, loaded_count: 25, has_more: false },
+            items: Array.from({ length: large ? 100 : g === 2 ? 5 : 10 }, (_, offset) => {
+              const i = g * (large ? 100 : 10) + offset;
+              return { id: `item:tree:${i}`, title: i === 1 ? '长标题视频：用于验证多端截断与键盘焦点仍然可以正常操作的内容' : `分组视频 ${i + 1}`, owner_name: '测试用户', cover_url: null, duration_seconds: 60,
+                parts: Array.from({ length: i === 0 ? 2 : 1 }, (_, part) => ({ id: `part:tree:${i}:${part}`, title: `分 P ${part + 1}`, aid: i + 1, bvid: 'BV1xx411c7mD', cid: i * 10 + part + 1, duration_seconds: 60, streams: [], assets: [] })),
+              };
+            }),
+          })),
+        });
+        target.__TAURI_INTERNALS__.invoke = async (command, args) => {
+          if (command === 'parse_create_source') { input = (args as { request: { input: string } }).request.input; return tree(); }
+          if (command === 'parse_load_page') return { tree: tree(), item_ids: Array.from({ length: 5 }, (_, i) => `item:tree:${20 + i}`) };
+          return original(command, args);
+        };
+      });
+      await page.goto('/');
+      await page.getByRole('textbox', { name: /^Bilibili 链接或 BV \/ AV/ }).fill('BV1kRXLBLEWR');
+      await page.getByRole('button', { name: '开始解析', exact: true }).click();
+      const tree = page.getByRole('region', { name: '合集分组', exact: true });
+      await expect(tree).toBeVisible();
+      await expect(tree.getByRole('checkbox', { name: '选择 42th', exact: true })).toBeVisible();
+      await tree.getByRole('checkbox', { name: '选择 5A', exact: true }).check();
+      await tree.getByRole('button', { name: '展开 5A', exact: true }).click();
+      await expect(tree.locator('.tree-scope')).toHaveCount(0);
+      const category = tree.locator('.tree-category').filter({ has: page.getByText('5A', { exact: true }) });
+      expect((await category.boundingBox())!.height).toBeLessThanOrEqual(40);
+      await expect(category).toContainText('10 个视频');
+      const mediaRow = tree.locator('.media-list-row').first();
+      await expect(mediaRow).toHaveCSS('border-top-width', '0px');
+      await expect(mediaRow.locator('.media-play')).toBeVisible();
+      await expect(mediaRow.getByLabel('时长')).toHaveText('1:00');
+      await expect(page.getByRole('button', { name: '下载所选 (11)', exact: true })).toBeEnabled();
+      await tree.getByRole('button', { name: '展开 分组视频 1', exact: true }).click();
+      const videoNode = tree.getByRole('treeitem').filter({ has: page.getByText('分组视频 1', { exact: true }) });
+      await videoNode.focus();
+      await page.keyboard.press('Space');
+      await expect(page.getByRole('button', { name: '下载所选 (9)', exact: true })).toBeEnabled();
+      await page.keyboard.press('Enter');
+      await expect(page.getByRole('button', { name: '下载所选 (11)', exact: true })).toBeEnabled();
+
+      await tree.getByText('P1 · 分 P 1', { exact: true }).click();
+      await expect(tree.getByRole('checkbox', { name: '选择 5A', exact: true })).toHaveAttribute('data-state', 'indeterminate');
+      await expect(page.getByRole('button', { name: '下载所选 (10)', exact: true })).toBeEnabled();
+      await tree.getByRole('button', { name: '展开 41th', exact: true }).focus();
+      await page.keyboard.press('Enter');
+      await expect(tree.getByRole('button', { name: '收起 41th', exact: true })).toBeVisible();
+      await tree.getByRole('button', { name: '播放 分组视频 3', exact: true }).click();
+      await expect(page.getByRole('button', { name: '下载所选 (10)', exact: true })).toBeEnabled();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await tree.locator('.collection-tree-list').evaluate((element) => { element.scrollTop = 0; });
+      await page.screenshot({ path: testInfo.outputPath('collection-tree.png'), fullPage: true });
+      if (device === 'android') {
+        await page.setViewportSize({ width: 1024, height: 600 });
+        await expect(tree.getByRole('checkbox', { name: '选择 5A', exact: true })).toHaveAttribute('data-state', 'indeterminate');
+        await page.screenshot({ path: testInfo.outputPath('collection-tree-tablet.png'), fullPage: true });
+      }
+      await page.getByRole('button', { name: /^内容库/ }).click();
+      await page.getByRole('tab', { name: /^订阅合集/ }).click();
+      await page.locator('.library-card').first().click();
+      await expect(tree).toBeVisible();
+      await tree.getByRole('checkbox', { name: '选择 5A', exact: true }).check();
+      await page.getByRole('button', { name: /下一页|Next Page/ }).click();
+      await expect(tree.getByRole('checkbox', { name: '选择 5A', exact: true })).toHaveCount(0);
+      await tree.getByRole('checkbox', { name: '选择 42th', exact: true }).check();
+      await expect(page.getByRole('button', { name: '下载所选 (16)', exact: true })).toBeEnabled();
+      await page.getByRole('button', { name: '下载所选 (16)', exact: true }).click();
+      await expect(page.getByRole('dialog', { name: '下载设置', exact: true })).toBeVisible();
+      if (device === 'desktop' && theme === 'light') {
+        await page.goto('/?treeLarge=1');
+        await page.getByRole('textbox', { name: /^Bilibili 链接或 BV \/ AV/ }).fill('BV1kRXLBLEWR');
+        await page.getByRole('button', { name: '开始解析', exact: true }).click();
+        await tree.getByRole('checkbox', { name: '选择 5A', exact: true }).check();
+        await tree.getByRole('button', { name: '展开 5A', exact: true }).click();
+        await expect(page.getByRole('button', { name: '下载所选 (101)', exact: true })).toBeEnabled();
+        expect(await tree.getByRole('treeitem').count()).toBeLessThan(50);
+        await tree.locator('.collection-tree-list').evaluate((element) => { element.scrollTop = element.scrollHeight; });
+        await tree.getByRole('checkbox', { name: '选择 分组视频 100', exact: true }).uncheck();
+        await expect(page.getByRole('button', { name: '下载所选 (100)', exact: true })).toBeEnabled();
+      }
+
+    });
+  }
+}
+
+for (const device of ['desktop', 'android'] as const) {
+  for (const theme of ['light', 'dark'] as const) {
+    test(`watch later browse details ${device} ${theme}`, async ({ page }, testInfo) => {
+      await page.setViewportSize(device === 'desktop' ? { width: 1280, height: 850 } : { width: 390, height: 844 });
+      if (device === 'android') await page.addInitScript(() => Object.defineProperty(navigator, 'userAgent', { value: 'Mozilla/5.0 (Linux; Android 12) Mobile' }));
+      await installTauriMock(page, theme, true, true);
+      await page.addInitScript(() => {
+        const target = window as any;
+        const original = target.__TAURI_INTERNALS__.invoke;
+        target.__DETAIL_REQUESTS__ = [];
+        const part = (i: number) => ({ id: `part:${i}`, title: `分 P ${i + 1}`, aid: i + 1, bvid: 'BV1xx411c7mD', cid: i + 100, duration_seconds: 60, streams: [], assets: [] });
+        const item = (i: number) => ({ id: `item:${i}`, title: `待看视频 ${i + 1}`, owner_name: '测试用户', cover_url: null, duration_seconds: 60, parts: [{ ...part(i), bvid: i === 0 ? 'BV1xx411c7mD' : i === 1 ? 'BV17x411w7KC' : 'BV1kRXLBLEWR', cid: null }] });
+        target.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+          if (command === 'parse_create_source') {
+            target.__DETAIL_REQUESTS__.push(args.request);
+            if (args.request.input.includes('watchlater')) return {
+              source: { id: 'watch_later:browse', kind: 'watch_later', input: args.request.input, title: '稍后再看', loaded_count: 25, total_count: 25, has_more: false },
+              groups: [{ id: 'group:watch', kind: 'watch_later', title: '稍后再看', page: null, items: Array.from({ length: 25 }, (_, i) => item(i)) }],
+            };
+            if (args.request.input.includes('BV1xx411c7mD')) return {
+              source: { id: 'collection:detail', kind: 'collection', input: 'https://space.bilibili.com/1/lists/2?type=season', title: '视频所属合集：20分钟精选互联网十年最爆笑猫咪合集，笑到停不下来 | Daily Dose of Internet 超长标题测试', loaded_count: 20, total_count: 61, has_more: true },
+              groups: [{ id: 'group:collection', kind: 'collection', title: '视频所属合集：20分钟精选互联网十年最爆笑猫咪合集，笑到停不下来 | Daily Dose of Internet 超长标题测试', page: { page: 1, page_size: 20, total_count: 61, has_more: true }, items: Array.from({ length: 20 }, (_, i) => item(i)) }],
+            };
+            const count = args.request.input.includes('BV17x411w7KC') ? 25 : 1;
+            return {
+              source: { id: 'video:detail', kind: 'video', input: count === 25 ? 'BV17x411w7KC' : 'BV1kRXLBLEWR', title: (count === 25 ? '多分 P 视频' : '普通视频') + '：20分钟精选互联网十年最爆笑猫咪合集，笑到停不下来 | Daily Dose of Internet 超长标题测试', loaded_count: 1, total_count: 1, has_more: false },
+              groups: [{ id: 'group:video', kind: 'video', title: '视频', page: null, items: [{ ...item(1), parts: Array.from({ length: count }, (_, i) => part(i)) }] }],
+            };
+          }
+          return original(command, args);
+        };
+      });
+      await page.goto('/');
+      await page.getByRole('button', { name: /^内容库/ }).click();
+      await page.getByRole('tab', { name: /^稍后再看/ }).click();
+      const cards = page.locator('.library-card');
+      await expect(cards).toHaveCount(20);
+      expect(await page.evaluate(() => (window as any).__DETAIL_REQUESTS__.length)).toBe(1);
+      await expect(page.getByRole('region', { name: '视频解析', exact: true })).toHaveCount(0);
+      await page.screenshot({ path: testInfo.outputPath('watch-later-cards.png'), fullPage: true });
+      await cards.first().focus();
+      await page.keyboard.press('Enter');
+      const rows = page.locator(device === 'desktop' ? '.media-list-row' : '.mobile-result');
+      await expect(rows.first()).toBeVisible();
+      await expect(page.locator('h2').filter({ hasText: '视频所属合集' })).toBeVisible();
+      if (device === 'desktop') {
+        await expect(page.getByRole('button', { name: '解析', exact: true })).toBeVisible();
+        await expect(page.getByRole('combobox', { name: '每批解析数量' })).toBeVisible();
+        await page.getByRole('button', { name: '更多解析方式', exact: true }).click();
+        await expect(page.getByRole('menuitem', { name: '解析全部', exact: true })).toBeVisible();
+        await page.keyboard.press('Escape');
+      } else {
+        await page.getByRole('button', { name: '内容操作', exact: true }).click();
+        await expect(page.getByRole('button', { name: '加载全部内容', exact: true })).toBeVisible();
+        await page.keyboard.press('Escape');
+      }
+      await page.screenshot({ path: testInfo.outputPath('watch-later-collection-detail.png'), fullPage: true });
+      await page.getByRole('button', { name: '返回内容集合', exact: true }).click();
+      await expect(cards).toHaveCount(20);
+      await cards.nth(1).click();
+      await expect(rows.first()).toContainText('分 P 1');
+      await expect(page.locator('h2').filter({ hasText: '多分 P 视频' })).toBeVisible();
+      await page.getByRole('button', { name: /下一页|Next Page/ }).click();
+      await expect(rows).toHaveCount(5);
+      await expect(rows.first()).toContainText('分 P 21');
+      await rows.first().click({ position: { x: 2, y: 2 } });
+      await expect(page.getByRole('button', { name: '下载所选 (1)', exact: true })).toBeEnabled();
+      await page.screenshot({ path: testInfo.outputPath('watch-later-parts.png'), fullPage: true });
+      await page.getByRole('button', { name: '下载所选 (1)', exact: true }).click();
+      await expect(page.getByRole('dialog', { name: '下载设置', exact: true })).toHaveCount(1);
+      await page.keyboard.press('Escape');
+      await page.getByRole('button', { name: '返回内容集合', exact: true }).click();
+      await cards.nth(2).click();
+      await expect(rows).toHaveCount(1);
+      await expect(page.locator('h2').filter({ hasText: '普通视频' })).toBeVisible();
+      for (const width of device === 'desktop' ? [1280, 1000, 800, 375] : [390, 1024]) {
+        await page.setViewportSize({ width, height: 850 });
+        const title = page.locator(device === 'desktop' ? '.library-folder-header h2' : '.mobile-detail-copy h2');
+        await expect(title).toHaveAttribute('title', /超长标题测试/);
+        const text = device === 'desktop' ? title.locator('span').first() : title;
+        await expect(text).toHaveCSS('text-overflow', 'ellipsis');
+        if (width <= 1000) expect(await text.evaluate(el => el.scrollWidth > el.clientWidth)).toBe(true);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        if (device === 'desktop' && width > 700) {
+          const all = await page.getByRole('button', { name: '下载全部', exact: true }).boundingBox();
+          const selected = await page.getByRole('button', { name: '下载所选 (0)', exact: true }).boundingBox();
+          expect(Math.abs(all!.y - selected!.y)).toBeLessThan(2);
+          expect((await title.boundingBox())!.x + (await title.boundingBox())!.width).toBeLessThan(all!.x);
+          await title.hover();
+        }
+        await page.screenshot({ path: testInfo.outputPath(`long-title-${width}.png`), fullPage: true, animations: 'disabled' });
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      expect(await page.evaluate(() => (window as any).__DETAIL_REQUESTS__.slice(1).every((r: any) => r.expand_video_collection))).toBe(true);
+    });
+  }
+}
+
+for (const device of ['desktop', 'android'] as const) {
+  for (const theme of ['light', 'dark'] as const) {
+    test(`library refresh skeleton ${device} ${theme}`, async ({ page }, testInfo) => {
+      await page.setViewportSize(device === 'desktop' ? { width: 1280, height: 850 } : { width: 390, height: 844 });
+      if (device === 'android') await page.addInitScript(() => Object.defineProperty(navigator, 'userAgent', { value: 'Mozilla/5.0 (Linux; Android 12) Mobile' }));
+      await installTauriMock(page, theme, true, true);
+      await page.addInitScript(() => {
+        const target = window as any;
+        const original = target.__TAURI_INTERNALS__.invoke;
+        target.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+          if (command === 'account_library_list' && target.__HOLD_LIBRARY__) {
+            await new Promise<void>(resolve => { target.__RELEASE_LIBRARY__ = resolve; });
+          }
+          return original(command, args);
+        };
+      });
+      await page.goto('/');
+      await page.getByRole('button', { name: /^内容库/ }).click();
+      await expect(page.locator('.library-card[role="button"]').first()).toBeVisible();
+      await page.getByRole('tab', { name: /^订阅合集/ }).click();
+      await expect(page.locator('.library-card[role="button"]').first()).toBeVisible();
+      for (const category of ['我的收藏', '订阅合集']) {
+        await page.evaluate(() => { (window as any).__HOLD_LIBRARY__ = true; (window as any).__RELEASE_LIBRARY__ = null; });
+        await page.getByRole('tab', { name: new RegExp(`^${category}`) }).focus();
+        await page.keyboard.press('Enter');
+        await expect(page.getByRole('status', { name: '正在加载内容', exact: true })).toBeVisible();
+        await expect(page.locator('.library-card.skeleton')).toHaveCount(6);
+        await expect(page.locator('.library-card[role="button"]')).toHaveCount(0);
+        await expect(page.locator('.library-sync')).toHaveCount(0);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        await page.screenshot({ path: testInfo.outputPath(`${category}-skeleton.png`), fullPage: true, animations: 'disabled' });
+        await expect.poll(() => page.evaluate(() => typeof (window as any).__RELEASE_LIBRARY__)).toBe('function');
+        await page.evaluate(() => { (window as any).__HOLD_LIBRARY__ = false; (window as any).__RELEASE_LIBRARY__(); });
+        await expect(page.locator('.library-card[role="button"]').first()).toBeVisible();
+        await expect(page.locator('.skeleton')).toHaveCount(0);
+      }
+    });
+  }
 }

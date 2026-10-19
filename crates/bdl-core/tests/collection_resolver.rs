@@ -186,6 +186,7 @@ async fn series_resolver_maps_first_page_without_mid_in_input() -> Result<(), Bd
 async fn collection_resolver_resolves_requested_page() -> Result<(), BdlError> {
     let resolver = CollectionResolver::with_api(FakeCollectionApi {
         page: ResolvedCollectionPage {
+            sections: vec![],
             request: PageRequest {
                 page_number: 2,
                 page_size: 20,
@@ -349,6 +350,7 @@ fn fake_series_api() -> FakeSeriesApi {
 
 fn fake_collection_page() -> ResolvedCollectionPage {
     ResolvedCollectionPage {
+        sections: vec![],
         mid: 1001,
         season_id: 678,
         title: "fixture collection".to_owned(),

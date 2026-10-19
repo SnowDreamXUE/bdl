@@ -53,18 +53,21 @@ export function useLibraryPage() {
   });
   const load = async (kind = library.activeKind, targetPage = 1) => {
     if (!pageActive || !account.profile.logged_in) return;
-    if (kind === 'watch_later') { openFolder({ title: '稍后再看', source_url: 'https://www.bilibili.com/list/watchlater', owner_name: null, media_count: 0 }); return; }
     await library.load(kind, targetPage);
   };
   const selectCategory = async (kind: LibraryCategory) => {
     if (detailFolder.value || detailLoading.value) await closeFolder();
     query.value = '';
     await library.selectKind(kind);
-    if (kind === 'watch_later') await load(kind);
   };
   const loadFolder = async (item: LibraryContentSource, requestId: number) => {
     const opened = await parse.createSource(item.source_url);
     if (requestId !== detailRequestId) return;
+    if (opened && parse.activeSource) {
+      const resolved = parse.activeSource.source;
+      detailFolder.value = { ...item, title: resolved.title, parsed_source_id: resolved.id,
+        source_url: /^https?:\/\//.test(resolved.input) ? resolved.input : item.source_url };
+    }
     detailLoading.value = false;
     if (opened) parse.clearNotice();
   };
@@ -83,12 +86,14 @@ export function useLibraryPage() {
   };
   const openDownloadSettings = () => void downloadPlanner.value?.openDialog();
   onMounted(() => {
+    if (pageActive) return;
     pageActive = true;
     if (account.profile.logged_in) void load();
   });
   onActivated(() => {
+    if (pageActive) return;
     pageActive = true;
-    if (library.activeKind === 'watch_later' && account.profile.logged_in && !detailFolder.value) void load();
+    if (account.profile.logged_in) void load();
   });
   onDeactivated(() => {
     pageActive = false;

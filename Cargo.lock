@@ -348,7 +348,7 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "bdl-cli"
-version = "0.8.5"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "bdl-core",
@@ -361,7 +361,7 @@ dependencies = [
 
 [[package]]
 name = "bdl-core"
-version = "0.8.5"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "bpi-rs",
@@ -385,7 +385,7 @@ dependencies = [
 
 [[package]]
 name = "bdl-desktop"
-version = "0.8.5"
+version = "0.9.0"
 dependencies = [
  "bdl-mobile-credentials",
  "bdl-mobile-execution",
@@ -401,12 +401,13 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-process",
  "tauri-plugin-updater",
+ "tauri-plugin-window-state",
  "url",
 ]
 
 [[package]]
 name = "bdl-mobile-credentials"
-version = "0.8.5"
+version = "0.9.0"
 dependencies = [
  "bdl-core",
  "bdl-tauri",
@@ -418,7 +419,7 @@ dependencies = [
 
 [[package]]
 name = "bdl-mobile-execution"
-version = "0.8.5"
+version = "0.9.0"
 dependencies = [
  "bdl-core",
  "bdl-tauri",
@@ -430,7 +431,7 @@ dependencies = [
 
 [[package]]
 name = "bdl-mobile-media"
-version = "0.8.5"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "bdl-core",
@@ -443,7 +444,7 @@ dependencies = [
 
 [[package]]
 name = "bdl-mobile-storage"
-version = "0.8.5"
+version = "0.9.0"
 dependencies = [
  "bdl-core",
  "bdl-tauri",
@@ -455,7 +456,7 @@ dependencies = [
 
 [[package]]
 name = "bdl-tauri"
-version = "0.8.5"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "bdl-core",
@@ -5114,6 +5115,21 @@ dependencies = [
  "url",
  "windows-sys 0.60.2",
  "zip",
+]
+
+[[package]]
+name = "tauri-plugin-window-state"
+version = "2.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73736611e14142408d15353e21e3cca2f12a3cfb523ad0ce85999b6d2ef1a704"
+dependencies = [
+ "bitflags 2.13.0",
+ "log",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

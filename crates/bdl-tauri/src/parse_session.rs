@@ -127,6 +127,9 @@ pub(crate) fn append_source_page(
     existing: &mut NormalizedSourceTree,
     next_page: NormalizedSourceTree,
 ) -> BdlResult<()> {
+    if existing.source.kind == SourceKind::Collection {
+        return bdl_core::resolver::paged::merge_collection_page(existing, next_page, false);
+    }
     if existing.source.id != next_page.source.id {
         return Err(BdlError::Planning {
             message: format!(
@@ -191,6 +194,20 @@ pub(crate) fn merge_browsed_page(
     existing: &mut NormalizedSourceTree,
     page: NormalizedSourceTree,
 ) -> BdlResult<()> {
+    if existing.source.kind == SourceKind::Collection {
+        let cursor = existing.groups.iter().find_map(|group| group.page.clone());
+        let has_more = existing.source.has_more;
+        append_source_page(existing, page)?;
+        for group in &mut existing.groups {
+            group.page = cursor.clone().map(|mut value| {
+                value.loaded_count = existing.source.loaded_count;
+                value.total_count = existing.source.total_count;
+                value
+            });
+        }
+        existing.source.has_more = has_more;
+        return Ok(());
+    }
     let cursors = existing
         .groups
         .iter()
@@ -266,16 +283,26 @@ pub(crate) fn normalize_selected_part_ids(
             continue;
         }
 
-        let hydrated_parts = list_placeholder_bvid(part_id)
-            .and_then(|bvid| {
-                tree.groups
-                    .iter()
-                    .flat_map(|group| &group.items)
-                    .find(|item| {
-                        item.parts
-                            .iter()
-                            .any(|part| part.bvid.as_deref() == Some(bvid))
-                    })
+        // List hydration preserves the item ID while replacing its placeholder parts.
+        // Watch-later placeholders use an aid rather than a BV suffix.
+        let stable_item = part_id.0.strip_prefix("part:").and_then(|key| {
+            tree.groups
+                .iter()
+                .flat_map(|group| &group.items)
+                .find(|item| item.id.0.strip_prefix("item:") == Some(key))
+        });
+        let hydrated_parts = stable_item
+            .or_else(|| {
+                list_placeholder_bvid(part_id).and_then(|bvid| {
+                    tree.groups
+                        .iter()
+                        .flat_map(|group| &group.items)
+                        .find(|item| {
+                            item.parts
+                                .iter()
+                                .any(|part| part.bvid.as_deref() == Some(bvid))
+                        })
+                })
             })
             .map(|item| item.parts.iter().map(|part| part.id.clone()));
 
@@ -520,6 +547,52 @@ fn source_kind_name(kind: SourceKind) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn collection_browsing_keeps_shared_cursor_for_new_sections() {
+        use super::{
+            NormalizedSourceTree, PageState, SourceKind, merge_browsed_page, next_page_request,
+        };
+        use bdl_core::{
+            ids::{GroupId, SourceId},
+            model::{NormalizedGroup, SourceSummary},
+        };
+        let group = |id: &str, page_number| NormalizedGroup {
+            id: GroupId(id.into()),
+            kind: "collection_section".into(),
+            title: id.into(),
+            items: vec![],
+            page: Some(PageState {
+                page_number,
+                page_size: 20,
+                loaded_count: 0,
+                total_count: Some(100),
+                has_more: true,
+            }),
+        };
+        let mut tree = NormalizedSourceTree {
+            source: SourceSummary {
+                id: SourceId("collection:test".into()),
+                kind: SourceKind::Collection,
+                input: "".into(),
+                title: "test".into(),
+                loaded_count: 0,
+                total_count: Some(100),
+                has_more: true,
+            },
+            groups: vec![group("A", 1)],
+        };
+        let mut page = tree.clone();
+        page.groups = vec![group("A", 4), group("B", 4)];
+        merge_browsed_page(&mut tree, page).unwrap();
+        assert_eq!(tree.groups.len(), 2);
+        assert!(
+            tree.groups
+                .iter()
+                .all(|g| g.page.as_ref().unwrap().page_number == 1)
+        );
+        assert_eq!(next_page_request(&tree).unwrap().page_number, 2);
+    }
     use bdl_core::ids::ItemId;
     use bdl_core::model::NormalizedItem;
 

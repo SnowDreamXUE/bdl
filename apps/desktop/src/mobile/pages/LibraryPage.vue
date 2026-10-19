@@ -35,18 +35,14 @@ const searchOpen = ref(false);
 <template>
   <section class="mobile-page" aria-label="账号内容库">
     <section class="library-panel">
-      <MobileListHeader v-if="!detailFolder || library.activeKind === 'watch_later'" class="library-topbar">
+      <MobileListHeader v-if="!detailFolder" class="library-topbar">
         <UiTabs v-model="categoryFilter" :tabs="categoryTabs" />
         <template #actions>
           <MobileListActions
             v-if="account.profile.logged_in"
             v-model:search-open="searchOpen"
             search-label="搜索内容库"
-            :show-search="library.activeKind !== 'watch_later'"
-            options-label="刷新内容库"
-            options-icon="i-tabler-refresh"
             :disabled="library.loading || detailLoading"
-            @options="load()"
           />
         </template>
       </MobileListHeader>
@@ -54,7 +50,6 @@ const searchOpen = ref(false);
       <LibraryFolderDetail
         v-if="detailFolder"
         :folder="detailFolder"
-        :embedded="library.activeKind === 'watch_later'"
         :loading-initial="detailLoading"
         @back="closeFolder"
         @download="openDownloadSettings"
@@ -70,11 +65,6 @@ const searchOpen = ref(false);
           label="搜索当前分类"
           placeholder="搜索标题或创建者"
         />
-
-        <div v-if="library.loading && page" class="library-sync" role="status" aria-live="polite">
-          <span aria-hidden="true"></span>
-          正在同步{{ activeCategory.label }}…
-        </div>
 
         <UiEmptyState
           v-if="!account.profile.logged_in"
@@ -96,7 +86,7 @@ const searchOpen = ref(false);
           <template #action><UiButton variant="secondary" @click="load()">重新加载</UiButton></template>
         </UiEmptyState>
 
-        <div v-else-if="library.loading && !page" class="library-grid" aria-label="正在加载内容">
+        <div v-else-if="library.loading" class="library-grid" role="status" aria-label="正在加载内容">
           <div v-for="index in 6" :key="index" class="library-card skeleton" aria-hidden="true">
             <span></span>
             <div><i></i><i></i></div>
@@ -133,7 +123,7 @@ const searchOpen = ref(false);
                 <h3 :title="item.title">{{ item.title }}</h3>
                 <div class="library-card-meta">
                   <span class="library-owner">{{ item.owner_name || '我的收藏夹' }}</span>
-                  <span class="library-count">{{ item.media_count }} 个视频</span>
+                  <span class="library-count">{{ item.kind === 'watch_later' ? '进入查看' : `${item.media_count} 个视频` }}</span>
                 </div>
               </div>
             </article>
@@ -143,7 +133,7 @@ const searchOpen = ref(false);
         <UiEmptyState
           v-else-if="page"
           :title="query ? '没有匹配的内容' : '这里还是空的'"
-          :description="query ? '尝试缩短关键词，或清除搜索条件。' : '在 Bilibili 添加内容后，回到这里刷新即可。'"
+          :description="query ? '尝试缩短关键词，或清除搜索条件。' : '在 Bilibili 添加内容后，重新进入内容库即可查看。'"
           icon="i-tabler-folder-open"
         >
           <template v-if="query" #action

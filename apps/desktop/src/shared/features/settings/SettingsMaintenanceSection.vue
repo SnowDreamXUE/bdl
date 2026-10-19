@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import SettingsCard from './SettingsCard.vue';
+import ClipboardPreference from '../../ui/ClipboardPreference.vue';
 import UiButton from '../../ui/Button.vue';
 import UiSelect from '../../ui/Select.vue';
 import UiTextField from '../../ui/TextField.vue';
@@ -16,6 +17,9 @@ const cleanup = useFileRemoval('temp', maintenanceTempPreview, (token) => settin
 
 <template>
   <section class="settings-block">
+    <SettingsCard title="剪贴板识别">
+      <ClipboardPreference />
+    </SettingsCard>
     <SettingsCard title="网络与日志">
       <UiTextField v-model="settingsProxyUrl" label="代理地址" placeholder="例如 http://127.0.0.1:7890，留空为直连" />
       <UiSelect v-model="settingsLogLevel" label="任务日志级别" :options="logLevelOptions" />

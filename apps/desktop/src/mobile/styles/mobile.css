@@ -95,11 +95,11 @@ html.bdl-mobile-density-scaled {
   line-height: 1.4;
   color: var(--color-text);
   overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  display: block;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: var(--mobile-weight-title);
-  font-size: var(--mobile-font-page-title);
+  font-size: var(--mobile-font-section-title);
 }
 .mobile-detail-copy p {
   margin: 0.25rem 0 0;
