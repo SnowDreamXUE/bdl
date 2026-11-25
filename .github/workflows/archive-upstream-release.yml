@@ -1,0 +1,83 @@
+name: Archive upstream release
+
+on:
+  schedule:
+    - cron: "0 4 * * *" # 04:00 UTC = 12:00 北京时间
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: archive-upstream-release
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Archive latest upstream release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          upstream=$(gh api "repos/$GITHUB_REPOSITORY" --jq '.parent.full_name // empty')
+          if [[ -z "$upstream" ]]; then
+            echo "Could not find the upstream repository." >&2
+            exit 1
+          fi
+
+          if ! release=$(gh api "repos/$upstream/releases/latest" 2>&1); then
+            if [[ "$release" == *"(HTTP 404)"* ]]; then
+              echo "No upstream Latest Release is available."
+              exit 0
+            fi
+            echo "$release" >&2
+            exit 1
+          fi
+
+          tag=$(jq -r '.tag_name' <<< "$release")
+          title=$(jq -r '.name // .tag_name' <<< "$release")
+          release_id=$(jq -r '.id' <<< "$release")
+          marker="<!-- archived-from: $upstream release $release_id -->"
+
+          if existing=$(gh release view --repo "$GITHUB_REPOSITORY" \
+            --json isDraft,body -- "$tag" 2>/dev/null); then
+            if [[ $(jq -r '.isDraft' <<< "$existing") == false ]]; then
+              echo "Release $tag is already published."
+              exit 0
+            fi
+
+            if ! jq -e --arg marker "$marker" \
+              '(.body // "") | contains($marker)' <<< "$existing" >/dev/null; then
+              echo "A separate draft already exists for $tag." >&2
+              exit 1
+            fi
+          else
+            git fetch --no-tags "https://github.com/$upstream.git" \
+              "refs/tags/$tag:refs/tags/$tag"
+            git push origin "refs/tags/$tag:refs/tags/$tag"
+
+            notes=$(mktemp)
+            jq -r '.body // ""' <<< "$release" > "$notes"
+            printf '\n\n%s\n' "$marker" >> "$notes"
+
+            gh release create --repo "$GITHUB_REPOSITORY" \
+              --verify-tag --draft --title "$title" --notes-file "$notes" -- "$tag"
+          fi
+
+          if jq -e '.assets | length > 0' <<< "$release" >/dev/null; then
+            assets_dir=$(mktemp -d)
+            gh release download --repo "$upstream" --dir "$assets_dir" \
+              --pattern '*' -- "$tag"
+
+            shopt -s nullglob dotglob
+            assets=("$assets_dir"/*)
+            gh release upload --repo "$GITHUB_REPOSITORY" --clobber \
+              -- "$tag" "${assets[@]}"
+          fi
+
+          gh release edit --repo "$GITHUB_REPOSITORY" \
+            --draft=false --latest -- "$tag"
